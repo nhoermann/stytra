@@ -9,88 +9,49 @@ A modular package to control stimulation and track behavior in zebrafish experim
     :scale: 50%
     :alt: Logo
 
-.. image:: https://badge.fury.io/py/stytra.svg
-    :target: https://pypi.org/project/stytra/
-
 .. image:: https://zenodo.org/badge/DOI/10.5281/zenodo.3238310.svg
    :target: https://doi.org/10.5281/zenodo.3238310
 
-.. image:: https://img.shields.io/badge/docs-0.8-yellow.svg
-    :target: http://www.portugueslab.com/stytra/
-    
-.. image:: https://github.com/portugueslab/stytra/actions/workflows/main.yml/badge.svg?branch=linting
-    :target: http://www.portugueslab.com/stytra/.github/workflows/
 
+If you are using Stytra for your own research, please `cite the original authors <https://doi.org/10.1371/journal.pcbi.1006699>`_!
 
-If you are using Stytra for your own research, please `cite us <https://doi.org/10.1371/journal.pcbi.1006699>`_!
-    
-Stytra is divided into independent modules which can be assembled
-depending on the experimental requirements. For a complete description, look at the `full documentation <http://www.portugueslab.com/stytra>`_.
+This is a fork of `portugueslab/stytra <https://github.com/portugueslab/stytra>`_, modernized for Python 3.10-3.12 and
+extended with multi-camera acquisition, heart-rate/pectoral-fin tracking, and several other changes described below.
+The original project's `documentation <http://www.portugueslab.com/stytra>`_ and
+`example gallery <http://www.portugueslab.com/stytra/userguide/1_examples_gallery.html>`_ still describe the core
+concepts (Protocols, Stimuli, tracking Pipelines) accurately, since this fork builds on top of that architecture
+rather than replacing it - just note that some install instructions and API details there predate the changes in
+this fork.
 
-Instructions to create your first experiment in Stytra and usage examples can be found in the `example gallery <http://www.portugueslab.com/stytra/userguide/1_examples_gallery.html>`_.
+Stytra is divided into independent modules which can be assembled depending on the experimental requirements:
+stimulus display and control, camera acquisition and closed-loop tracking, and data logging.
 
+Capabilities
+------------
 
-Quick installation guide
-------------------------
+Beyond the original project, this fork adds:
 
-Stytra relies on `opencv <https://docs.opencv.org/3
-.0-beta/doc/py_tutorials/py_tutorials.html>`_ for some of its fish tracking
-functions. If you don't have it installed, open the Anaconda prompt and type::
+- **Python 3.10-3.12 support.** Dependencies that were unmaintained or broken on modern Python
+  (``arrayqueues``, ``flammkuchen``, ``pyFirmata``) have been replaced with a custom zero-copy shared-memory
+  queue, thin `PyTables <https://www.pytables.org/>`_ helpers, and ``pyfirmata2`` respectively.
+- **Multi-camera acquisition and tracking.** Any number of cameras can run concurrently, each with its own
+  independent tracking pipeline and recording settings, via a ``cameras=[...]`` config list (the legacy
+  single-camera ``camera=``/``tracking=``/``recording=`` config keeps working unchanged).
+- **Heart-rate and pectoral-fin tracking**, alongside the existing tail/eye/multi-fish tracking pipelines -
+  ROI-based, running at full frame rate per camera.
+- **Camera auto-detection and an interactive Camera Setup dialog** to pick which detected cameras to use and
+  assign each a role and tracking method, with save/load of named setups. Includes support for adding a
+  video/HDF5 file as a "simulated camera", so a full multi-camera experiment can be built and tested with no
+  hardware attached at all.
+- **A tiled multi-camera GUI**: one live preview dock per camera, each with its own ROI overlay and
+  tracking-parameter controls.
+- **Zarr-based video storage** as a streaming, chunked, compressed alternative to the existing HDF5/mp4 writers,
+  selectable per camera.
+- **ScanImage acquisition triggering** via the MATLAB Engine API.
+- Assorted GUI safety/usability improvements: a confirmation prompt before closing a window mid-protocol,
+  warnings/errors surfaced in the persistent log (not just a fading status bar), and a couple of real bug fixes
+  (a canceled save-folder dialog silently blanking the save path; a PyQt5 float/int crash in the calibration
+  overlay).
 
-    pip install opencv-python
-
-If you are using Windows, git (used for tracking software versions) might not be
-installed. Git can also be easily installed with conda::
-
-    conda install git
-
-
-This should be everything you need to make ready before installing stytra.
-
- > PyQt5 is not listed as an explicit requirement because it should come with the Anaconda package. If you are not using Anaconda, make sure you have it installed and updated before installing Stytra!
-
-The simplest way to install Stytra is with pip::
-
-    pip install stytra
-
-You can verify the installation by running one of the examples in stytra
-examples folder. To run a simple looming stimulus experiment, you can
-type::
-
-    python -m stytra.examples.looming_exp
-
-If the GUI opens correctly and pressing the play button starts the stimulus:
-congratulations, installation was successful! If it crashes, check
-if you have all dependencies correctly installed. If it still does not work,
-open an issue on the `Stytra github page <https://github
-.com/portugueslab/stytra>`_.
-
-Editable installation
-.....................
-
-On the other hand, if you want to modify the internals of stytra or use the
-unreleased features, clone or download stytra from `github <https://github.com/portugueslab/stytra>`_ and install it with::
-
-    pip install path_to_stytra/stytra
-
-If you want to be able to change the stytra code and use the changed version,
-install using the -e argument::
-
-
-    pip install -e path_to_stytra/stytra
-
-
-
-Now you can have a look at the stytra `example gallery <http://www.portugueslab.com/stytra/userguide/1_examples_gallery.html>`_, or you can start
-`configuring a computer for Stytra experiments <http://www.portugueslab.com/stytra/userguide/5_configuring_computer.html>`_.
-In the second case, you might want to have a look at the camera APIs section below first.
-
-.. note::
-    Stytra might raise an error after quitting because of a bug in the current
-    version of pyqtgraph (a package we are using for online plotting).
-    If you are annoyed by the error messages
-    when closing the program you can install the develop version of pyqtgraph
-    from their `github repository <https://github.com/pyqtgraph/pyqtgraph>`_.
-    The problem will be resolved once the next pyqtgraph version is released.
-
-For further details on the installation please consult the relative `documentation  page <http://www.portugueslab.com/stytra/userguide/0_install_guide.html>`_.
+See `docs/MODERNIZATION_PROPOSAL.md <docs/MODERNIZATION_PROPOSAL.md>`_ for the full history of these changes,
+including what's been verified against real hardware and what still needs it.
