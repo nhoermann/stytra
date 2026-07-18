@@ -285,6 +285,9 @@ class Experiment(QObject):
             # Put duration of the experiment in the queue for the trigger:
             duration_exp = self.protocol_runner.duration
             self.trigger_duration_queue.put(duration_exp)
+            # Also report where this run's data will be saved, so a
+            # ZMQ-triggering caller can be told (see ZmqTrigger.check_trigger).
+            self.trigger.tracking_path_queue.put(self.filename_base())
 
             self.logger.info("Waiting for trigger signal...")
 

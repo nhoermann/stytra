@@ -78,6 +78,10 @@ class Trigger(Process):
         self.kill_event = Event()
         self.device_params_queue = Queue()
         self.duration_queue = Queue()
+        # Where the Experiment reports the path it will save this run's data
+        # under, so a ZMQ-triggering caller can be told where to find it
+        # (see ZmqTrigger.check_trigger).
+        self.tracking_path_queue = Queue()
 
     def check_trigger(self):
         """Check condition required for triggering to happen. Implemented in
@@ -135,13 +139,15 @@ class ZmqTrigger(Trigger):
         """
         self.port = port
         self.protocol_duration = None
+        self.tracking_data_path = None
         self.scope_config = {}
         super().__init__()
 
     def check_trigger(self):
         """Wait to receive the json file and reply with the duration of the
-        experiment. Then, to the `queue_trigger_params` the received dict,
-        so that the `Experiment` can store it with the rest of the data.
+        experiment plus the path this run's data is being saved under. Then,
+        put in `device_params_queue` the received dict, so that the
+        `Experiment` can store it with the rest of the data.
         """
 
         poller = zmq.Poller()
@@ -151,10 +157,19 @@ class ZmqTrigger(Trigger):
             print(self.protocol_duration)
         except Empty:
             pass
+        try:
+            self.tracking_data_path = self.tracking_path_queue.get(timeout=0.0001)
+        except Empty:
+            pass
         if poller.poll(10):
             self.scope_config = self.zmq_socket.recv_json()
             self.device_params_queue.put(self.scope_config)
-            self.zmq_socket.send_json(self.protocol_duration)
+            self.zmq_socket.send_json(
+                {
+                    "duration": self.protocol_duration,
+                    "tracking_data_path": self.tracking_data_path,
+                }
+            )
             return True
         else:
             return False
