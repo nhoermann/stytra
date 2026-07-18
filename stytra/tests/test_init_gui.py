@@ -1,6 +1,6 @@
 from time import sleep, time
 
-from lightparam import Param
+from stytra.lightparam import Param
 import stytra
 
 from stytra.stimulation import Protocol, Pause

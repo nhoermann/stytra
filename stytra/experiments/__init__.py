@@ -3,7 +3,7 @@ import os
 import traceback
 from queue import Empty
 import numpy as np
-import flammkuchen as fl
+from stytra.io import save_h5_dict
 import logging
 import tempfile
 import git
@@ -25,14 +25,14 @@ from stytra.gui.container_windows import (
     DynamicStimExperimentWindow,
 )
 
-import pkg_resources
+import importlib.metadata
 
 try:
     import av
 except ImportError:
     pass
 
-from lightparam import Parametrized, Param
+from stytra.lightparam import Parametrized, Param
 
 
 def imports():
@@ -100,6 +100,7 @@ class Experiment(QObject):
         metadata_animal=None,
         loop_protocol=False,
         arduino_config=None,
+        scanimage_config=None,
         log_format="csv",
         trigger_duration_queue=None,
         scope_triggering=None,
@@ -113,6 +114,7 @@ class Experiment(QObject):
         self.protocol = protocol
 
         self.arduino_config = arduino_config
+        self.scanimage_config = scanimage_config
 
         # If there's a trigger, reference its queue to pass the duration:
         self.trigger = scope_triggering
@@ -137,6 +139,7 @@ class Experiment(QObject):
         self.window_main = None
         self.scope_config = None
         self.arduino_board = None
+        self.scanimage = None
         self.abort = False
 
         self.logger = logging.getLogger()
@@ -243,6 +246,16 @@ class Experiment(QObject):
                 layout=self.arduino_config["layout"],
             )
 
+        if self.scanimage_config is not None:
+            from stytra.hardware.scanimage import ScanImageMatlabConnection
+
+            self.scanimage = ScanImageMatlabConnection(**self.scanimage_config)
+            try:
+                self.scanimage.connect()
+            except Exception as e:
+                self.logger.info("Could not connect to ScanImage: {}".format(e))
+                self.scanimage = None
+
         self.make_window()
         self.protocol_runner.update_protocol()
 
@@ -324,6 +337,11 @@ class Experiment(QObject):
         """
         self.check_trigger()
         self.reset()
+        if self.scanimage is not None:
+            try:
+                self.scanimage.start_acquisition()
+            except Exception as e:
+                self.logger.info("Could not trigger ScanImage acquisition: {}".format(e))
         self.protocol_runner.start()
         self.read_scope_data()
 
@@ -383,8 +401,8 @@ class Experiment(QObject):
                     #########################################################################################
 
                     try:
-                        version = pkg_resources.get_distribution("stytra").version
-                    except pkg_resources.DistributionNotFound:
+                        version = importlib.metadata.version("stytra")
+                    except importlib.metadata.PackageNotFoundError:
                         self.logger.info("Could not find stytra version")
 
                 except git.InvalidGitRepositoryError:
@@ -473,6 +491,9 @@ class Experiment(QObject):
 
         if self.arduino_board is not None:
             self.arduino_board.close()
+
+        if self.scanimage is not None:
+            self.scanimage.close()
 
         st = self.window_main.saveState()
         geom = self.window_main.saveGeometry()
@@ -631,7 +652,7 @@ class VisualExperiment(Experiment):
                         movie_dict = dict(
                             movie=np.stack(movie, 0), movie_times=movie_times
                         )
-                        fl.save(
+                        save_h5_dict(
                             self.filename_base() + "stim_movie.h5",
                             movie_dict,
                             compression="blosc",

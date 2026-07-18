@@ -5,7 +5,7 @@ import numpy as np
 from PyQt5.QtCore import QRect, QPoint
 from PyQt5.QtGui import QPainter, QPen, QColor, QBrush, QPolygon
 
-from lightparam.param_qt import ParametrizedQt, Param
+from stytra.lightparam.param_qt import ParametrizedQt, Param
 
 
 class CalibrationException(Exception):
@@ -130,9 +130,9 @@ class CrossCalibrator(Calibrator):
         ch = h // 2
 
         # draw the cross and the axis labels
-        p.drawLine(cw - l2, ch, cw + l2, h // 2)
+        p.drawLine(int(cw - l2), ch, int(cw + l2), h // 2)
         p.drawText(w * 3 // 4, ch - 5, "x")
-        p.drawLine(cw, h // 2 + l2, cw, ch - l2)
+        p.drawLine(cw, int(h // 2 + l2), cw, int(ch - l2))
         p.drawText(cw + 5, h * 3 // 4, "y")
 
         # draw the "fish outline"
@@ -225,7 +225,7 @@ class CircleCalibrator(Calibrator):
             angles[i] = np.abs(
                 np.arccos(
                     np.sum((pt_prev - pt) * (pt_next - pt))
-                    / np.product(
+                    / np.prod(
                         [np.sqrt(np.sum((pt2 - pt) ** 2)) for pt2 in [pt_prev, pt_next]]
                     )
                 )

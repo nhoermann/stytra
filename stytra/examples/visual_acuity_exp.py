@@ -8,7 +8,7 @@ from stytra.stimulation.stimuli import (
     FullFieldVisualStimulus,
     CombinerStimulus,
 )
-from lightparam import Param
+from stytra.lightparam import Param
 
 REQUIRES_EXTERNAL_HARDWARE = False
 

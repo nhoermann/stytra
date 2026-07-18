@@ -1,4 +1,4 @@
-from lightparam import Parametrized, Param
+from stytra.lightparam import Parametrized, Param
 
 
 class GeneralMetadata(Parametrized):

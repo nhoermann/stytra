@@ -1,7 +1,7 @@
 import numpy as np
 from numba import jit
-from lightparam import Param, Parametrized
-from scipy.ndimage.filters import gaussian_filter1d
+from stytra.lightparam import Param, Parametrized
+from scipy.ndimage import gaussian_filter1d
 from stytra.utilities import reduce_to_pi
 from stytra.tracking.pipelines import ImageToDataNode, NodeOutput
 from collections import namedtuple

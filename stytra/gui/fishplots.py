@@ -7,10 +7,10 @@ from stytra.tracking.online_bouts import find_bouts_online, BoutState
 from stytra.utilities import reduce_to_pi
 
 from collections import deque
-from lightparam import Param, Parametrized
-from lightparam.gui import ParameterGui
+from stytra.lightparam import Param, Parametrized
+from stytra.lightparam.gui import ParameterGui
 
-from scipy.ndimage.filters import gaussian_filter1d
+from scipy.ndimage import gaussian_filter1d
 
 
 class StreamingPositionPlot(pg.GraphicsView):

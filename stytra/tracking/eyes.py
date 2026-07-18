@@ -5,7 +5,7 @@
 import numpy as np
 from skimage.filters import threshold_local
 import cv2
-from lightparam import Parametrized, Param
+from stytra.lightparam import Parametrized, Param
 from stytra.tracking.pipelines import ImageToDataNode, NodeOutput
 from collections import namedtuple
 
@@ -116,7 +116,7 @@ def _pad(im, padding=0, val=0):
     -------
 
     """
-    padded = np.lib.pad(
+    padded = np.pad(
         im,
         ((padding, padding), (padding, padding)),
         mode="constant",

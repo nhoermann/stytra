@@ -8,7 +8,7 @@ from stytra.stimulation.stimuli import (
 from stytra.stimulation.stimuli.conditional import CenteringWrapper
 
 from stytra.stimulation import Protocol
-from lightparam import Param
+from stytra.lightparam import Param
 from pathlib import Path
 
 REQUIRES_EXTERNAL_HARDWARE = False

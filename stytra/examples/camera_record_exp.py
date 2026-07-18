@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import QApplication
 from stytra.hardware.video.write import VideoWriter
 from stytra.stimulation import Protocol, Pause
 from stytra.stimulation.stimuli import FullFieldVisualStimulus
-from lightparam import Param
+from stytra.lightparam import Param
 
 from stytra.experiments.tracking_experiments import CameraVisualExperiment
 from stytra.tracking.tracking_process import DispatchProcess

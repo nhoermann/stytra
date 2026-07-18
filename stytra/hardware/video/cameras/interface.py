@@ -40,6 +40,21 @@ class Camera:
         self.downsampling = downsampling
         self.roi = roi
 
+    @staticmethod
+    def list_devices():
+        """List identifiers of connected devices for this camera backend.
+
+        Returns
+        -------
+        list
+            list of device identifiers (e.g. indices or serial numbers) that
+            can be passed as the constructor's device-selection kwarg. Empty
+            if the backend doesn't support enumeration or its vendor SDK
+            isn't installed.
+
+        """
+        return []
+
     def open_camera(self):
         """Initialise the camera."""
 

@@ -27,6 +27,17 @@ class OpenCVCamera(Camera):
         self.cam = cv2.VideoCapture(cam_idx)
         self.bw = bw
 
+    @staticmethod
+    def list_devices(max_index=8):
+        """Probe device indices, since opencv has no enumeration API."""
+        devices = []
+        for i in range(max_index):
+            cap = cv2.VideoCapture(i)
+            if cap.isOpened():
+                devices.append(i)
+            cap.release()
+        return devices
+
     def open_camera(self):
         """ """
         return "Webcam opened!"

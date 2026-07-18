@@ -132,7 +132,7 @@ def prepare_json(it, **kwargs):
     if isinstance(it, list):
         return [prepare_json(el, **kwargs) for el in it]
     if isinstance(it, np.generic):
-        return np.asscalar(it)
+        return it.item()
     if isinstance(it, datetime):
         if kwargs.get("convert_datetime", False):
             return it.isoformat()
@@ -272,7 +272,7 @@ def save_df(df, path, fileformat):
     elif fileformat == "feather":
         df.to_feather(outpath)
     elif fileformat == "hdf5":
-        df.to_hdf(outpath, "/data", complib="blosc", complevel=5)
+        df.to_hdf(outpath, key="/data", complib="blosc", complevel=5)
     elif fileformat == "json":
         json.dump(df.to_dict(), open(str(outpath), "w"))
     else:

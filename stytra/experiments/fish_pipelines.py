@@ -3,12 +3,16 @@ from stytra.tracking.preprocessing import Prefilter, BackgroundSubtractor
 from stytra.tracking.tail import CentroidTrackingMethod
 from stytra.tracking.fish import FishTrackingMethod
 from stytra.tracking.eyes import EyeTrackingMethod
+from stytra.tracking.heart import HeartRateTrackingMethod
+from stytra.tracking.fin import PectoralFinTrackingMethod
 from stytra.gui.fishplots import TailStreamPlot, BoutPlot
 from stytra.gui.camera_display import (
     TailTrackingSelection,
     CameraViewFish,
     EyeTrackingSelection,
     EyeTailTrackingSelection,
+    HeartRateSelection,
+    PectoralFinSelection,
 )
 
 
@@ -48,9 +52,25 @@ class EyeTailTrackingPipeline(Pipeline):
         self.display_overlay = EyeTailTrackingSelection
 
 
+class HeartRateTrackingPipeline(Pipeline):
+    def __init__(self):
+        super().__init__()
+        self.heartrate = HeartRateTrackingMethod(parent=self.root)
+        self.display_overlay = HeartRateSelection
+
+
+class PectoralFinTrackingPipeline(Pipeline):
+    def __init__(self):
+        super().__init__()
+        self.fintrack = PectoralFinTrackingMethod(parent=self.root)
+        self.display_overlay = PectoralFinSelection
+
+
 pipeline_dict = dict(
     tail=TailTrackingPipeline,
     fish=FishTrackingPipeline,
     eyes=EyeTrackingPipeline,
     eyes_tail=EyeTailTrackingPipeline,
+    heart_rate=HeartRateTrackingPipeline,
+    pectoral_fin=PectoralFinTrackingPipeline,
 )

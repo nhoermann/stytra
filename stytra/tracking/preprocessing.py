@@ -7,7 +7,7 @@ import cv2
 
 import numpy as np
 from numba import vectorize, uint8, float32
-from lightparam import Param
+from stytra.lightparam import Param
 from stytra.tracking.pipelines import ImageToImageNode, NodeOutput
 
 

@@ -1,5 +1,5 @@
 from stytra.tracking.pipelines import Pipeline, ImageToDataNode, NodeOutput
-from lightparam import Param
+from stytra.lightparam import Param
 from collections import namedtuple
 
 

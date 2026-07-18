@@ -7,7 +7,7 @@ import pyqtgraph as pg
 from stytra.calibration import CircleCalibrator, CrossCalibrator, CalibrationException
 from stytra.stimulation.stimulus_display import StimDisplayWidget
 from PyQt5.QtWidgets import QVBoxLayout, QMessageBox
-from lightparam.gui import ControlSpin
+from stytra.lightparam.gui import ControlSpin
 
 import cv2
 import logging

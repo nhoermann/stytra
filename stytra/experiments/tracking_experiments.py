@@ -29,23 +29,50 @@ from stytra.experiments.fish_pipelines import pipeline_dict
 
 from stytra.stimulation.estimators import estimator_dict
 
-from stytra.hardware.video.write import H5VideoWriter, StreamingVideoWriter
+from stytra.hardware.video.write import (
+    H5VideoWriter,
+    StreamingVideoWriter,
+    ZarrVideoWriter,
+)
 
 import sys
 from typing import *
 
 
+def _normalize_cameras_config(cameras, camera, recording, extra_singular=None):
+    """Normalize the legacy singular ``camera=``/``recording=`` (optionally
+    plus one more singular key, e.g. ``tracking=``) into the plural
+    ``cameras=[...]`` list form, so every existing single-camera caller
+    keeps working unchanged. Returns a list of resolved entry dicts, each
+    guaranteed to have a "role" key.
+    """
+    if cameras is None:
+        entry = dict(camera=camera, recording=recording)
+        if extra_singular:
+            entry.update(extra_singular)
+        cameras = [entry]
+
+    resolved = []
+    for i, entry in enumerate(cameras):
+        entry = dict(entry)
+        entry.setdefault("role", "camera_{}".format(i))
+        resolved.append(entry)
+    return resolved
+
+
 class CameraVisualExperiment(VisualExperiment):
     """
-    General class for Experiment that need to handle a camera.
-    It implements a view of frames from the camera in the control GUI, and the respective parameters.
-    For debugging it can be used with a video read from file with the VideoFileSource class.
+    General class for Experiment that need to handle one or more cameras.
+    It implements a view of frames from the (first) camera in the control
+    GUI, and the respective parameters. For debugging it can be used with a
+    video read from file with the VideoFileSource class.
     """
 
     def __init__(
         self,
         *args,
-        camera: dict,
+        camera: dict = None,
+        cameras: list = None,
         camera_queue_mb: int = 100,
         recording: Optional[Dict[str, Any]] = None,
         **kwargs
@@ -55,60 +82,129 @@ class CameraVisualExperiment(VisualExperiment):
         ----------
         camera
             dictionary containing the parameters for the camera setup (i.e. for offline processing it would contain
-            an entry 'video_file' with the path to the video).
+            an entry 'video_file' with the path to the video). Mutually exclusive with `cameras`.
+        cameras
+            list of dictionaries, one per camera, each with a "camera" sub-dict (same shape as the singular `camera`
+            param above), an optional "role" string identifying it (defaults to "camera_<i>"), and an optional
+            "recording" sub-dict. Use this instead of `camera`/`recording` to run several cameras at once.
         camera_queue_mb
             the maximum size of frames that are kept at once, if the limit is exceeded, frames will be dropped.
         recording
             dictionary containing the parameters for the recording (i.e. to save to an mp4 file, add the 'extension'
-            entry with the 'mp4' value). If None, no recording is performed.
+            entry with the 'mp4' value). If None, no recording is performed. Mutually exclusive with `cameras`.
         """
         super().__init__(*args, **kwargs)
-        if camera.get("video_file", None) is None:
-            self.camera = CameraSource(
-                camera["type"],
-                rotation=camera.get("rotation", 0),
-                downsampling=camera.get("downsampling", 1),
-                roi=camera.get("roi", (-1, -1, -1, -1)),
-                max_mbytes_queue=camera_queue_mb,
-                camera_params=camera.get("camera_params", dict()),
-            )
-            self.camera_state = CameraControlParameters(tree=self.dc)
-        else:
-            self.camera = VideoFileSource(
-                camera["video_file"],
-                rotation=camera.get("rotation", 0),
-                max_mbytes_queue=camera_queue_mb,
-            )
-            self.camera_state = VideoControlParameters(tree=self.dc)
 
-        self.acc_camera_framerate = FramerateQueueAccumulator(
-            self,
-            queue=self.camera.framerate_queue,
-            goal_framerate=camera.get("min_framerate", None),
-            name="camera",  # TODO implement no goal
-        )
+        if not hasattr(self, "_camera_configs"):
+            self._camera_configs = _normalize_cameras_config(cameras, camera, recording)
+
+        self.cameras = {}
+        self.camera_states = {}
+        self.acc_camera_framerates = {}
+
+        for entry in self._camera_configs:
+            role = entry["role"]
+            cam_cfg = entry["camera"]
+
+            if cam_cfg.get("video_file", None) is None:
+                self.cameras[role] = CameraSource(
+                    cam_cfg["type"],
+                    rotation=cam_cfg.get("rotation", 0),
+                    downsampling=cam_cfg.get("downsampling", 1),
+                    roi=cam_cfg.get("roi", (-1, -1, -1, -1)),
+                    max_mbytes_queue=camera_queue_mb,
+                    camera_params=cam_cfg.get("camera_params", dict()),
+                )
+                self.camera_states[role] = CameraControlParameters(tree=self.dc)
+            else:
+                self.cameras[role] = VideoFileSource(
+                    cam_cfg["video_file"],
+                    rotation=cam_cfg.get("rotation", 0),
+                    max_mbytes_queue=camera_queue_mb,
+                )
+                self.camera_states[role] = VideoControlParameters(tree=self.dc)
+
+            self.acc_camera_framerates[role] = FramerateQueueAccumulator(
+                self,
+                queue=self.cameras[role].framerate_queue,
+                goal_framerate=cam_cfg.get("min_framerate", None),
+                name="camera_{}".format(role),
+            )
 
         # New parameters are sent with GUI timer:
         self.gui_timer.timeout.connect(self.send_gui_parameters)
-        self.gui_timer.timeout.connect(self.acc_camera_framerate.update_list)
+        for acc in self.acc_camera_framerates.values():
+            self.gui_timer.timeout.connect(acc.update_list)
 
-        self.recording = recording
-        if recording is not None:
-            self._setup_recording(
-                kbit_framerate=recording.get("kbit_rate", 1000),
-                extension=recording["extension"],
-            )
+        self.recording_events = {}
+        self.reset_events = {}
+        self.finish_events = {}
+        self.frame_dispatchers = {}
+        self.frame_recorders = {}
+
+        for entry in self._camera_configs:
+            rec_cfg = entry.get("recording", None)
+            if rec_cfg is not None:
+                self._setup_recording(
+                    entry["role"],
+                    kbit_framerate=rec_cfg.get("kbit_rate", 1000),
+                    extension=rec_cfg["extension"],
+                )
+
+        # A camera with neither "recording" (handled above) nor "tracking"
+        # (handled by TrackingExperiment.__init__, which populates
+        # pipeline_clss on self *before* calling super().__init__() - see
+        # there) still needs a plain frame dispatcher for its live preview
+        # in the GUI (CameraViewWidget always reads
+        # experiment.frame_dispatchers[role]). Roles already spoken for by
+        # either path are skipped here.
+        tracked_roles = getattr(self, "pipeline_clss", {})
+        for entry in self._camera_configs:
+            role = entry["role"]
+            if role not in self.frame_dispatchers and role not in tracked_roles:
+                self.frame_dispatchers[role] = self._setup_frame_dispatcher(role)
+                self.frame_dispatchers[role].start()
+
+    # -- Backward-compatible scalar accessors: everything not yet made
+    # multi-camera-aware (GUI docking, save paths, etc.) keeps working
+    # unchanged by transparently getting "the first (or only) camera".
+    @property
+    def camera(self):
+        if not self.cameras:
+            raise AttributeError("camera")
+        return next(iter(self.cameras.values()))
+
+    @property
+    def camera_state(self):
+        if not self.camera_states:
+            raise AttributeError("camera_state")
+        return next(iter(self.camera_states.values()))
+
+    @property
+    def acc_camera_framerate(self):
+        if not self.acc_camera_framerates:
+            raise AttributeError("acc_camera_framerate")
+        return next(iter(self.acc_camera_framerates.values()))
+
+    @property
+    def frame_dispatcher(self):
+        if not self.frame_dispatchers:
+            raise AttributeError("frame_dispatcher")
+        return next(iter(self.frame_dispatchers.values()))
 
     def reset(self) -> None:
         super().reset()
-        self.acc_camera_framerate.reset()
+        for acc in self.acc_camera_framerates.values():
+            acc.reset()
 
     def initialize_plots(self) -> None:
         super().initialize_plots()
 
     def send_gui_parameters(self) -> None:
-        self.camera.control_queue.put(self.camera_state.params.changed_values())
-        self.camera_state.params.acknowledge_changes()
+        for role, cam in self.cameras.items():
+            state = self.camera_states[role]
+            cam.control_queue.put(state.params.changed_values())
+            state.params.acknowledge_changes()
 
     def start_experiment(self) -> None:
         """ """
@@ -117,26 +213,37 @@ class CameraVisualExperiment(VisualExperiment):
 
     def start_protocol(self) -> None:
         """
-        Starts the recording if the recording parameters are set.
+        Starts the recording(s) if recording parameters are set for any camera.
         """
-        if self.recording is not None:
-            # Slight work around, the problem is in when set_id() is updated.
-            # See issue #71.
-            p = Path()
-            fb = p.joinpath(
-                self.folder_name, self.current_timestamp.strftime("%H%M%S") + "_"
-            )
-            self.dc.add_static_data(fb, "recording/filename")
-            self._start_recording(fb)
+        multi = len(self._camera_configs) > 1
+        for entry in self._camera_configs:
+            if entry.get("recording") is not None:
+                role = entry["role"]
+                # Slight work around, the problem is in when set_id() is updated.
+                # See issue #71.
+                p = Path()
+                suffix = (role + "_") if multi else ""
+                fb = p.joinpath(
+                    self.folder_name,
+                    self.current_timestamp.strftime("%H%M%S") + "_" + suffix,
+                )
+                self.dc.add_static_data(
+                    fb,
+                    "recording/filename"
+                    if not multi
+                    else "recording/{}/filename".format(role),
+                )
+                self._start_recording(role, fb)
 
         super().start_protocol()
 
     def end_protocol(self, save: bool = True) -> None:
         """
-        Stops the recording if the recording parameters are set.
+        Stops the recording(s) if recording parameters are set for any camera.
         """
-        if self.recording is not None:
-            self._stop_recording()
+        for entry in self._camera_configs:
+            if entry.get("recording") is not None:
+                self._stop_recording(entry["role"])
 
         super().end_protocol(save=save)
 
@@ -151,35 +258,43 @@ class CameraVisualExperiment(VisualExperiment):
     def go_live(self) -> None:
         """ """
         sys.excepthook = self.excepthook
-        self.camera.start()
+        for cam in self.cameras.values():
+            cam.start()
 
     def wrap_up(self, *args, **kwargs) -> None:
         self.gui_timer.stop()
         super().wrap_up(*args, **kwargs)
-        self.camera.kill_event.set()
 
-        for q in [self.camera.frame_queue]:
-            q.clear()
+        for cam in self.cameras.values():
+            cam.kill_event.set()
+            cam.frame_queue.clear()
 
-        if self.camera.is_alive():
-            self.camera.join()
+        for cam in self.cameras.values():
+            if cam.is_alive():
+                cam.join()
 
-    def _setup_frame_dispatcher(self, recording_event: Event = None) -> DispatchProcess:
+        for cam in self.cameras.values():
+            cam.frame_queue.unlink()
+
+    def _setup_frame_dispatcher(
+        self, role: str, recording_event: Event = None
+    ) -> DispatchProcess:
         """
-        Creates a dispatcher that handles the frames of the camera. It will trigger the recording (i.e. stop it) using
+        Creates a dispatcher that handles the frames of a camera. It will trigger the recording (i.e. stop it) using
         the given 'recording_event' event.
 
         Parameters
         ----------
+        role
+            the camera's role/id (key into self.cameras).
         recording_event
             The event used for recording (if relevant).
         """
-        return DispatchProcess(
-            self.camera.frame_queue, self.camera.kill_event, recording_event
-        )
+        cam = self.cameras[role]
+        return DispatchProcess(cam.frame_queue, cam.kill_event, recording_event)
 
     def _setup_recording(
-        self, kbit_framerate: int = 1000, extension: str = "mp4"
+        self, role: str, kbit_framerate: int = 1000, extension: str = "mp4"
     ) -> None:
         """
         Does the necessary setup before performing the recording, such as creating events, setting up the dispatcher
@@ -187,85 +302,102 @@ class CameraVisualExperiment(VisualExperiment):
 
         Parameters
         ----------
+        role
+            the camera's role/id (key into self.cameras) to record.
         kbit_framerate
             the byte rate at which the video is encoded.
         extension
             the extension used at the end of the video file.
         """
-        self.recording_event = Event()
-        self.reset_event = Event()
-        self.finish_event = Event()
+        self.recording_events[role] = Event()
+        self.reset_events[role] = Event()
+        self.finish_events[role] = Event()
 
-        self.frame_dispatcher = self._setup_frame_dispatcher(self.recording_event)
-        self.frame_dispatcher.start()
+        self.frame_dispatchers[role] = self._setup_frame_dispatcher(
+            role, self.recording_events[role]
+        )
+        self.frame_dispatchers[role].start()
 
         if extension == "h5":
-            self.frame_recorder = H5VideoWriter(
-                input_queue=self.frame_dispatcher.frame_copy_queue,
-                recording_event=self.recording_event,
-                reset_event=self.reset_event,
-                finish_event=self.finish_event,
+            self.frame_recorders[role] = H5VideoWriter(
+                input_queue=self.frame_dispatchers[role].frame_copy_queue,
+                recording_event=self.recording_events[role],
+                reset_event=self.reset_events[role],
+                finish_event=self.finish_events[role],
+                log_format=self.log_format,
+            )
+        elif extension == "zarr":
+            self.frame_recorders[role] = ZarrVideoWriter(
+                input_queue=self.frame_dispatchers[role].frame_copy_queue,
+                recording_event=self.recording_events[role],
+                reset_event=self.reset_events[role],
+                finish_event=self.finish_events[role],
                 log_format=self.log_format,
             )
         else:
-            self.frame_recorder = StreamingVideoWriter(
-                input_queue=self.frame_dispatcher.frame_copy_queue,
-                recording_event=self.recording_event,
-                reset_event=self.reset_event,
-                finish_event=self.finish_event,
+            self.frame_recorders[role] = StreamingVideoWriter(
+                input_queue=self.frame_dispatchers[role].frame_copy_queue,
+                recording_event=self.recording_events[role],
+                reset_event=self.reset_events[role],
+                finish_event=self.finish_events[role],
                 kbit_rate=kbit_framerate,
                 log_format=self.log_format,
             )
 
-        self.frame_recorder.start()
+        self.frame_recorders[role].start()
 
-    def _start_recording(self, filename: str) -> None:
+    def _start_recording(self, role: str, filename: str) -> None:
         """
         Pushes the filename to the queue and sets the recording event in order to start the recording.
 
         Parameters
         ----------
+        role
+            the camera's role/id being recorded.
         filename
             a unique identifier that will be added to the video file.
         """
-        self.frame_recorder.filename_queue.put(filename)
-        self.recording_event.set()
+        self.frame_recorders[role].filename_queue.put(filename)
+        self.recording_events[role].set()
 
-    def _stop_recording(self) -> None:
+    def _stop_recording(self, role: str) -> None:
         """
         Stops the recording by clearing the recording event.
         """
-        self.recording_event.clear()
+        self.recording_events[role].clear()
 
-    def _finish_recording(self) -> None:
+    def _finish_recording(self, role: str) -> None:
         """
         Finishes the recording process and joins the frame recorder.
         """
-        self.frame_recorder.finish_event.set()
-        self.frame_recorder.join()
+        self.frame_recorders[role].finish_event.set()
+        self.frame_recorders[role].join()
 
     def excepthook(self, exctype, value, tb) -> None:
-        if self.recording is not None:
-            self._finish_recording()
+        for role in list(self.frame_recorders.keys()):
+            self._finish_recording(role)
 
         traceback.print_tb(tb)
         print("{0}: {1}".format(exctype, value))
-        self.camera.kill_event.set()
-        self.camera.join()
+        for cam in self.cameras.values():
+            cam.kill_event.set()
+            cam.join()
 
 
 class TrackingExperiment(CameraVisualExperiment):
     """
-    Abstract class for an experiment which contains tracking.
+    Abstract class for an experiment which contains tracking on one or more
+    cameras.
 
-    This class is the base for any experiment that tracks behavior (being it
-    eyes, tail, or anything else).
-    The general purpose of the class is handle a frame dispatcher,
-    the relative parameters queue and the output queue.
+    Each camera in the `cameras` list config can have its own "tracking"
+    sub-dict (a different tracking method per camera, e.g. tail tracking on
+    one camera and heart-rate tracking on another, running concurrently), or
+    none at all (in which case that camera is only acquired/recorded, not
+    tracked).
 
-    The frame dispatcher take two input queues:
+    For each tracked camera, a frame dispatcher handles two input queues:
 
-        - frame queue from the camera;
+        - frame queue from that camera;
         - parameters queue from parameter window.
 
     and it puts data in three queues:
@@ -280,7 +412,9 @@ class TrackingExperiment(CameraVisualExperiment):
     def __init__(
         self,
         *args,
-        tracking: dict,
+        tracking: dict = None,
+        camera: dict = None,
+        cameras: list = None,
         recording: Optional[Dict[str, Any]] = None,
         second_output_queue: Queue = None,
         **kwargs
@@ -290,97 +424,157 @@ class TrackingExperiment(CameraVisualExperiment):
             containing fields:  tracking_method
                                 estimator: can be vigor for embedded fish, position
                                     for freely-swimming, or a custom subclass of Estimator
+            Mutually exclusive with `cameras` (which carries its own per-camera "tracking" sub-dict).
         recording
             dictionary containing the parameters for the recording (i.e. to save to an mp4 file, add the 'extension'
-            entry with the 'mp4' value). If None, no recording is performed.
-        data_name
-            name of the data in the final experiment log (defined in the child).
+            entry with the 'mp4' value). If None, no recording is performed. Mutually exclusive with `cameras`.
         """
 
-        self.processing_params_queue = Queue()
+        self._camera_configs = _normalize_cameras_config(
+            cameras, camera, recording, extra_singular=dict(tracking=tracking)
+        )
+
         self.second_output_queue = second_output_queue
-        self.tracking_output_queue = NamedTupleQueue()
         self.finished_sig = Event()
 
-        self.pipeline_cls = (
-            pipeline_dict.get(tracking["method"], None)
-            if isinstance(tracking["method"], str)
-            else tracking["method"]
-        )
+        self.pipeline_clss = {}
+        self.processing_params_queues = {}
+        self.tracking_output_queues = {}
+        for entry in self._camera_configs:
+            tr_cfg = entry.get("tracking")
+            if tr_cfg is None:
+                continue
+            role = entry["role"]
+            pcls = (
+                pipeline_dict.get(tr_cfg["method"], None)
+                if isinstance(tr_cfg["method"], str)
+                else tr_cfg["method"]
+            )
+            if pcls is None:
+                raise NameError("The selected tracking method does not exist!")
+            self.pipeline_clss[role] = pcls
+            self.processing_params_queues[role] = Queue()
+            self.tracking_output_queues[role] = NamedTupleQueue()
 
         super().__init__(recording=recording, *args, **kwargs)
         self.arguments.update(locals())
 
-        if self.pipeline_cls is None:
-            raise NameError("The selected tracking method does not exist!")
-        self.pipeline = self.pipeline_cls()
-        assert isinstance(self.pipeline, Pipeline)
-        self.pipeline.setup(tree=self.dc)
+        self.pipelines = {}
+        self.acc_trackings = {}
+        self.acc_tracking_framerates = {}
 
-        if recording is None:
-            # start frame dispatcher process:
-            self.frame_dispatcher = self._setup_frame_dispatcher()
-            self.frame_dispatcher.start()
+        for entry in self._camera_configs:
+            role = entry["role"]
+            if role not in self.pipeline_clss:
+                continue
 
-        self.acc_tracking = QueueDataAccumulator(
-            name="tracking",
-            experiment=self,
-            data_queue=self.tracking_output_queue,
-            monitored_headers=self.pipeline.headers_to_plot,
-        )
-        self.acc_tracking.sig_acc_init.connect(self.refresh_plots)
+            pipeline = self.pipeline_clss[role]()
+            assert isinstance(pipeline, Pipeline)
+            pipeline.setup(tree=self.dc)
+            self.pipelines[role] = pipeline
 
-        # Create and connect framerate accumulator.
-        self.acc_tracking_framerate = FramerateQueueAccumulator(
-            self,
-            queue=self.frame_dispatcher.framerate_queue,
-            name="tracking",
-            goal_framerate=kwargs["camera"].get("min_framerate", None),
-        )
+            # Roles with a "recording" config already got a frame dispatcher
+            # (a TrackingProcess, via polymorphism from
+            # CameraVisualExperiment._setup_recording) - only roles without
+            # recording need one set up here, purely for live tracking.
+            if role not in self.frame_dispatchers:
+                self.frame_dispatchers[role] = self._setup_frame_dispatcher(role)
+                self.frame_dispatchers[role].start()
 
-        self.gui_timer.timeout.connect(self.acc_tracking_framerate.update_list)
+            self.acc_trackings[role] = QueueDataAccumulator(
+                name="tracking_{}".format(role),
+                experiment=self,
+                data_queue=self.tracking_output_queues[role],
+                monitored_headers=pipeline.headers_to_plot,
+            )
+            self.acc_trackings[role].sig_acc_init.connect(self.refresh_plots)
 
-        # Data accumulator is updated with GUI timer:
-        self.gui_timer.timeout.connect(self.acc_tracking.update_list)
+            self.acc_tracking_framerates[role] = FramerateQueueAccumulator(
+                self,
+                queue=self.frame_dispatchers[role].framerate_queue,
+                name="tracking_{}".format(role),
+                goal_framerate=entry["camera"].get("min_framerate", None),
+            )
 
-        # Tracking is reset at experiment start:
-        self.protocol_runner.sig_protocol_started.connect(self.acc_tracking.reset)
+            self.gui_timer.timeout.connect(
+                self.acc_tracking_framerates[role].update_list
+            )
+            self.gui_timer.timeout.connect(self.acc_trackings[role].update_list)
+            self.protocol_runner.sig_protocol_started.connect(
+                self.acc_trackings[role].reset
+            )
 
-        est_type = tracking.get("estimator", None)
-        if est_type is None:
-            est = None
-        elif isinstance(est_type, str):
-            est = estimator_dict.get(est_type, None)
-        else:
-            est = est_type
-
-        if est is not None:
+        # Only one estimator is supported (closed-loop stimuli reference
+        # experiment.estimator as a single scalar) - the first camera whose
+        # tracking config requests one wins.
+        self.estimator = None
+        self.estimator_log = None
+        for entry in self._camera_configs:
+            tr_cfg = entry.get("tracking")
+            if tr_cfg is None:
+                continue
+            est_type = tr_cfg.get("estimator", None)
+            if est_type is None:
+                continue
+            est = (
+                estimator_dict.get(est_type, None)
+                if isinstance(est_type, str)
+                else est_type
+            )
+            if est is None:
+                continue
             self.estimator_log = EstimatorLog(experiment=self)
             self.estimator = est(
-                self.acc_tracking,
+                self.acc_trackings[entry["role"]],
                 experiment=self,
-                **tracking.get("estimator_params", {})
+                **tr_cfg.get("estimator_params", {})
             )
             self.estimator_log.sig_acc_init.connect(self.refresh_plots)
-        else:
-            self.estimator = None
+            break
 
-    def _setup_frame_dispatcher(self, recording_event: Event = None) -> TrackingProcess:
+    @property
+    def pipeline(self):
+        if not self.pipelines:
+            raise AttributeError("pipeline")
+        return next(iter(self.pipelines.values()))
+
+    @property
+    def acc_tracking(self):
+        if not self.acc_trackings:
+            raise AttributeError("acc_tracking")
+        return next(iter(self.acc_trackings.values()))
+
+    @property
+    def acc_tracking_framerate(self):
+        if not self.acc_tracking_framerates:
+            raise AttributeError("acc_tracking_framerate")
+        return next(iter(self.acc_tracking_framerates.values()))
+
+    def _setup_frame_dispatcher(
+        self, role: str, recording_event: Event = None
+    ) -> DispatchProcess:
         """
-        Initialises and returns a dispatcher.
-        Can be extended by subclasses to initialise their own dispatcher.
+        Initialises and returns a dispatcher for the given camera role.
+        Falls back to a plain (non-tracking) DispatchProcess if that role
+        has no tracking configured.
 
         Parameters
         ----------
+        role
+            the camera's role/id (key into self.cameras).
         recording_event
             event used to signal the start and end of the recording.
         """
+        if role not in self.pipeline_clss:
+            return super()._setup_frame_dispatcher(role, recording_event)
+
+        cam = self.cameras[role]
         return TrackingProcess(
-            in_frame_queue=self.camera.frame_queue,
-            finished_signal=self.camera.kill_event,
-            pipeline=self.pipeline_cls,
-            processing_parameter_queue=self.processing_params_queue,
-            output_queue=self.tracking_output_queue,
+            in_frame_queue=cam.frame_queue,
+            finished_signal=cam.kill_event,
+            pipeline=self.pipeline_clss[role],
+            processing_parameter_queue=self.processing_params_queues[role],
+            output_queue=self.tracking_output_queues[role],
             second_output_queue=self.second_output_queue,
             recording_signal=recording_event,
             gui_framerate=20,
@@ -388,8 +582,10 @@ class TrackingExperiment(CameraVisualExperiment):
 
     def reset(self) -> None:
         super().reset()
-        self.acc_tracking_framerate.reset()
-        self.acc_tracking.reset()
+        for acc in self.acc_tracking_framerates.values():
+            acc.reset()
+        for acc in self.acc_trackings.values():
+            acc.reset()
         if self.estimator is not None:
             self.estimator.reset()
             self.estimator_log.reset()
@@ -407,7 +603,8 @@ class TrackingExperiment(CameraVisualExperiment):
 
     def refresh_plots(self) -> None:
         self.window_main.stream_plot.remove_streams()
-        self.window_main.stream_plot.add_stream(self.acc_tracking)
+        for acc in self.acc_trackings.values():
+            self.window_main.stream_plot.add_stream(acc)
         if self.estimator is not None:
             self.window_main.stream_plot.add_stream(self.estimator_log)
 
@@ -422,7 +619,8 @@ class TrackingExperiment(CameraVisualExperiment):
         Called upon gui timeout, put tracking parameters in the relative queue.
         """
         super().send_gui_parameters()
-        self.processing_params_queue.put(self.pipeline.serialize_changed_params())
+        for role, pipeline in self.pipelines.items():
+            self.processing_params_queues[role].put(pipeline.serialize_changed_params())
 
     def start_protocol(self) -> None:
         # Freeze the plots so the plotting does not interfere with
@@ -443,7 +641,7 @@ class TrackingExperiment(CameraVisualExperiment):
             self.window_main.stream_plot.toggle_freeze()
 
     def save_data(self) -> None:
-        """Save tail position and dynamic parameters and terminate."""
+        """Save tracking positions and dynamic parameters and terminate."""
 
         self.window_main.camera_display.save_image(
             name=self.filename_base() + "img.png"
@@ -451,7 +649,11 @@ class TrackingExperiment(CameraVisualExperiment):
         self.dc.add_static_data(self.filename_prefix() + "img.png", "tracking/image")
 
         # Save log and estimators:
-        self.save_log(self.acc_tracking, "behavior_log")
+        multi = len(self.acc_trackings) > 1
+        for role, acc in self.acc_trackings.items():
+            self.save_log(
+                acc, "behavior_log_{}".format(role) if multi else "behavior_log"
+            )
         try:
             self.save_log(self.estimator.log, "estimator_log")
         except AttributeError:
@@ -461,17 +663,27 @@ class TrackingExperiment(CameraVisualExperiment):
 
     def set_protocol(self, protocol: np.ndarray) -> None:
         """
-        Connect new protocol start to resetting of the data accumulator.
+        Connect new protocol start to resetting of the data accumulators.
         """
         super().set_protocol(protocol)
-        self.protocol.sig_protocol_started.connect(self.acc_tracking.reset)
+        for acc in self.acc_trackings.values():
+            self.protocol.sig_protocol_started.connect(acc.reset)
 
     def wrap_up(self, *args, **kwargs) -> None:
         super().wrap_up(*args, **kwargs)
 
-        self.frame_dispatcher.gui_queue.clear()
+        for dispatcher in self.frame_dispatchers.values():
+            dispatcher.gui_queue.clear()
 
-        self.frame_dispatcher.join()
+        for dispatcher in self.frame_dispatchers.values():
+            dispatcher.join()
+
+        for dispatcher in self.frame_dispatchers.values():
+            dispatcher.gui_queue.unlink()
+            if getattr(dispatcher, "frame_copy_queue", None) is not None:
+                dispatcher.frame_copy_queue.unlink()
+            if getattr(dispatcher, "output_frame_queue", None) is not None:
+                dispatcher.output_frame_queue.unlink()
 
     def excepthook(self, exctype, value, tb) -> None:
         """
@@ -479,6 +691,9 @@ class TrackingExperiment(CameraVisualExperiment):
         """
         traceback.print_tb(tb)
         print("{0}: {1}".format(exctype, value))
-        super()._finish_recording()
-        self.camera.join()
-        self.frame_dispatcher.join()
+        for role in list(self.frame_recorders.keys()):
+            self._finish_recording(role)
+        for cam in self.cameras.values():
+            cam.join()
+        for dispatcher in self.frame_dispatchers.values():
+            dispatcher.join()

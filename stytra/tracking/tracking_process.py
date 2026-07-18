@@ -2,7 +2,7 @@ from queue import Empty, Full
 from multiprocessing import Event, Value
 
 from stytra.utilities import FrameProcess
-from arrayqueues.shared_arrays import TimestampedArrayQueue
+from stytra.shared_queue import TimestampedArrayQueue
 
 
 class TrackingProcess(FrameProcess):
@@ -155,6 +155,10 @@ class TrackingProcess(FrameProcess):
                 else frame,
             )
 
+        self.frame_queue.close()
+        self.gui_queue.close()
+        if self.frame_copy_queue is not None:
+            self.frame_copy_queue.close()
         return
 
     def send_to_gui(self, frametime, frame):
@@ -236,6 +240,9 @@ class DispatchProcess(FrameProcess):
             # calculate the frame rate
             self.update_framerate()
 
+        self.frame_queue.close()
+        self.gui_queue.close()
+        self.output_frame_queue.close()
         return
 
     def send_to_gui(self, frametime, frame):

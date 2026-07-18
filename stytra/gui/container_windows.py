@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QDockWidget,
     QFileDialog,
+    QMessageBox,
 )
 
 from stytra.gui.monitor_control import ProjectorAndCalibrationWidget
@@ -24,7 +25,7 @@ from stytra.gui.framerate_viewer import MultiFrameratesWidget
 
 from stytra.stimulation.stimulus_display import StimulusDisplayOnMainWindow
 
-from lightparam.gui import ParameterGui, pretty_name, ControlCombo, ControlButton
+from stytra.lightparam.gui import ParameterGui, pretty_name, ControlCombo, ControlButton
 
 
 class QPlainTextEditLogger(logging.Handler):
@@ -102,7 +103,7 @@ class ExperimentWindow(QMainWindow):
         self.logger = QPlainTextEditLogger()
         self.experiment.logger.addHandler(self.logger)
 
-        self.status_display = StatusMessageDisplay()
+        self.status_display = StatusMessageDisplay(logger=self.experiment.logger)
         self.statusBar().addWidget(self.status_display)
 
         self.plot_framerate = MultiFrameratesWidget()
@@ -115,8 +116,7 @@ class ExperimentWindow(QMainWindow):
         folder = QFileDialog.getExistingDirectory(
             caption="Results folder", directory=self.experiment.base_dir
         )
-        print(folder)
-        if folder is not None:
+        if folder:
             self.experiment.base_dir = folder
             self.act_folder.setText("Save in {}".format(self.experiment.base_dir))
 
@@ -171,20 +171,32 @@ class ExperimentWindow(QMainWindow):
         else:
             self.experiment.use_db = False
 
-    def closeEvent(self, *args, **kwargs):
+    def closeEvent(self, event):
         """
 
         Parameters
         ----------
-        *args :
-
-        **kwargs :
+        event : QCloseEvent
 
 
         Returns
         -------
 
         """
+        protocol_runner = self.experiment.protocol_runner
+        if protocol_runner is not None and protocol_runner.running:
+            reply = QMessageBox.question(
+                self,
+                "Protocol running",
+                "A protocol is still running - close anyway?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                if event is not None:
+                    event.ignore()
+                return
+
         self.experiment.wrap_up()
 
 
@@ -229,45 +241,55 @@ class VisualExperimentWindow(ExperimentWindow):
 
 
 class CameraExperimentWindow(VisualExperimentWindow):
-    """Window for an experiment with a camera"""
+    """Window for an experiment with one or more cameras - builds one
+    preview tile (and, in `construct_ui`, one dock) per camera role."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.camera_display = None
-        if (
-            hasattr(self.experiment, "pipeline")
-            and self.experiment.pipeline.display_overlay is not None
-        ):
-            self.camera_display = self.experiment.pipeline.display_overlay(
-                experiment=self.experiment
-            )
-        else:
-            self.camera_display = CameraViewWidget(experiment=kwargs["experiment"])
+        pipelines = getattr(self.experiment, "pipelines", {})
+        self.camera_displays = {}
+        for role in self.experiment.cameras.keys():
+            pipeline = pipelines.get(role)
+            if pipeline is not None and pipeline.display_overlay is not None:
+                self.camera_displays[role] = pipeline.display_overlay(
+                    experiment=self.experiment, role=role
+                )
+            else:
+                self.camera_displays[role] = CameraViewWidget(
+                    experiment=self.experiment, role=role
+                )
 
         self.plot_framerate.setMaximumHeight(120)
 
-        self.status_display.addMessageQueue(self.experiment.camera.message_queue)
+        for cam in self.experiment.cameras.values():
+            self.status_display.addMessageQueue(cam.message_queue)
+
+    @property
+    def camera_display(self):
+        """The first (or only) camera tile - kept for code that hasn't been
+        made multi-camera-aware yet (e.g. `save_image` on protocol end)."""
+        return next(iter(self.camera_displays.values()))
 
     def construct_ui(self):
         super().construct_ui()
 
         self.experiment.gui_timer.timeout.connect(self.status_display.refresh)
 
-        dockCamera = QDockWidget("Camera", self)
-        dockCamera.setWidget(self.camera_display)
-        dockCamera.setObjectName("dock_camera")
+        for role in self.experiment.cameras.keys():
+            dock_camera = QDockWidget("Camera ({})".format(role), self)
+            dock_camera.setWidget(self.camera_displays[role])
+            dock_camera.setObjectName("dock_camera_{}".format(role))
+            self.addDockWidget(Qt.LeftDockWidgetArea, dock_camera)
+            self.add_dock(dock_camera)
 
-        self.plot_framerate.add_framerate(self.experiment.acc_camera_framerate)
-
-        self.addDockWidget(Qt.LeftDockWidgetArea, dockCamera)
+        for acc in self.experiment.acc_camera_framerates.values():
+            self.plot_framerate.add_framerate(acc)
 
         # moving the framerate dock
         self.removeDockWidget(self.docks["dock_framerates"])
         self.addDockWidget(Qt.LeftDockWidgetArea, self.docks["dock_framerates"])
         self.docks["dock_framerates"].setVisible(True)
-
-        self.add_dock(dockCamera)
 
 
 class DynamicStimExperimentWindow(VisualExperimentWindow):
@@ -332,37 +354,44 @@ class TrackingExperimentWindow(CameraExperimentWindow):
 
         self.monitoring_layout.addWidget(self.stream_plot)
 
-        self.extra_widget = (
-            self.experiment.pipeline.extra_widget(self.experiment.acc_tracking)
-            if self.experiment.pipeline.extra_widget is not None
-            else None
-        )
+        # One set of tracking controls (diagnostics dropdown + params button)
+        # per camera that actually has a tracking pipeline - added onto that
+        # camera's own tile, rather than one global control bound to "the
+        # first camera".
+        self.extra_widgets = {}
+        self.drop_displays = {}
+        self.buttons_tracking_params = {}
+        self.track_params_wnds = {}
 
-        # Display dropdown
-        self.drop_display = ControlCombo(
-            self.experiment.pipeline.all_params["diagnostics"], "image"
-        )
+        for role, pipeline in self.experiment.pipelines.items():
+            if pipeline.extra_widget is not None:
+                self.extra_widgets[role] = pipeline.extra_widget(
+                    self.experiment.acc_trackings[role]
+                )
 
-        if hasattr(self.camera_display, "set_pos_from_tree"):
-            self.drop_display.control.currentTextChanged.connect(
-                self.camera_display.set_pos_from_tree
+            drop_display = ControlCombo(pipeline.all_params["diagnostics"], "image")
+            camera_display = self.camera_displays[role]
+            if hasattr(camera_display, "set_pos_from_tree"):
+                drop_display.control.currentTextChanged.connect(
+                    camera_display.set_pos_from_tree
+                )
+            self.drop_displays[role] = drop_display
+
+            button_tracking_params = IconButton(
+                icon_name="edit_tracking",
+                action_name="Change tracking parameters ({})".format(role),
             )
+            button_tracking_params.clicked.connect(
+                lambda checked=False, r=role: self.open_tracking_params_tree(r)
+            )
+            self.buttons_tracking_params[role] = button_tracking_params
 
-        # Tracking params button:
-        self.button_tracking_params = IconButton(
-            icon_name="edit_tracking", action_name="Change tracking parameters"
-        )
-        self.button_tracking_params.clicked.connect(self.open_tracking_params_tree)
+            camera_display.layout_control.addStretch(10)
+            camera_display.layout_control.addWidget(drop_display)
+            camera_display.layout_control.addWidget(button_tracking_params)
 
-        self.camera_display.layout_control.addStretch(10)
-        self.camera_display.layout_control.addWidget(self.drop_display)
-        self.camera_display.layout_control.addWidget(self.button_tracking_params)
-
-        self.track_params_wnd = None
-
-        self.status_display.addMessageQueue(
-            self.experiment.frame_dispatcher.message_queue
-        )
+        for dispatcher in self.experiment.frame_dispatchers.values():
+            self.status_display.addMessageQueue(dispatcher.message_queue)
 
     def construct_ui(self):
         """ """
@@ -377,41 +406,39 @@ class TrackingExperimentWindow(CameraExperimentWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, monitoring_dock)
         self.add_dock(monitoring_dock)
 
-        self.plot_framerate.add_framerate(self.experiment.acc_tracking_framerate)
+        for acc in self.experiment.acc_tracking_framerates.values():
+            self.plot_framerate.add_framerate(acc)
 
-        if self.extra_widget:
-            self.experiment.gui_timer.timeout.connect(self.extra_widget.update)
+        for role, extra_widget in self.extra_widgets.items():
+            self.experiment.gui_timer.timeout.connect(extra_widget.update)
 
-            dock_extra = QDockWidget(self.extra_widget.title, self)
-            dock_extra.setObjectName("dock_extra")
-            dock_extra.setWidget(self.extra_widget)
+            dock_extra = QDockWidget(extra_widget.title, self)
+            dock_extra.setObjectName("dock_extra_{}".format(role))
+            dock_extra.setWidget(extra_widget)
             self.add_dock(dock_extra)
             self.addDockWidget(Qt.RightDockWidgetArea, dock_extra)
             dock_extra.setVisible(False)
 
         return previous_widget
 
-    def open_tracking_params_tree(self):
+    def open_tracking_params_tree(self, role):
         """ """
-        self.track_params_wnd = QWidget()
-        self.track_params_wnd.setLayout(QVBoxLayout())
-        if hasattr(self.experiment, "pipeline"):
-            for paramsname, paramspar in self.experiment.pipeline.all_params.items():
-                if (
-                    paramsname == "diagnostics"
-                    or paramsname == "reset"
-                    or len(paramspar.params.items()) == 0
-                ):
-                    continue
-                self.track_params_wnd.layout().addWidget(
-                    QLabel(paramsname.replace("/", "→"))
-                )
-                self.track_params_wnd.layout().addWidget(ParameterGui(paramspar))
+        wnd = QWidget()
+        wnd.setLayout(QVBoxLayout())
+        pipeline = self.experiment.pipelines[role]
+        for paramsname, paramspar in pipeline.all_params.items():
+            if (
+                paramsname == "diagnostics"
+                or paramsname == "reset"
+                or len(paramspar.params.items()) == 0
+            ):
+                continue
+            wnd.layout().addWidget(QLabel(paramsname.replace("/", "→")))
+            wnd.layout().addWidget(ParameterGui(paramspar))
 
-        self.track_params_wnd.layout().addWidget(
-            ControlButton(self.experiment.pipeline.all_params["reset"], "reset")
-        )
+        wnd.layout().addWidget(ControlButton(pipeline.all_params["reset"], "reset"))
 
-        self.track_params_wnd.setWindowTitle("Tracking parameters")
+        wnd.setWindowTitle("Tracking parameters ({})".format(role))
 
-        self.track_params_wnd.show()
+        wnd.show()
+        self.track_params_wnds[role] = wnd

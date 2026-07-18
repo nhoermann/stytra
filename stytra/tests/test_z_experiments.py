@@ -3,7 +3,7 @@ import shutil
 import tempfile
 import json
 import numpy as np
-import flammkuchen as fl
+import pandas as pd
 
 from stytra.experiments import VisualExperiment
 from stytra.experiments.tracking_experiments import TrackingExperiment
@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import QApplication
 from stytra.stimulation import Protocol, Pause
 from stytra.stimulation.stimuli import FullFieldVisualStimulus
 
-from lightparam import Param
+from stytra.lightparam import Param
 from pathlib import Path
 
 from stytra.triggering import Trigger
@@ -171,7 +171,7 @@ class TestExperimentClass(unittest.TestCase):
             with open(self.metadata_path, "r") as f:
                 data = json.load(f)
 
-            behavior_log = fl.load(
+            behavior_log = pd.read_hdf(
                 self.metadata_path.parent / data["tracking"]["behavior_log"], "/data"
             )
 

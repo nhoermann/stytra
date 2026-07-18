@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from lightparam import ParameterTree, set_nested, visit_dict
+from stytra.lightparam import ParameterTree, set_nested, visit_dict
 from stytra.utilities import prepare_json, recursive_update
 
 

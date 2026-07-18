@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
 from skimage.io import imsave
 from numba import jit
 from math import sin, cos
-from lightparam.gui import ParameterGui, ControlToggleIcon
+from stytra.lightparam.gui import ParameterGui, ControlToggleIcon
 
 from stytra.gui.buttons import IconButton, ToggleIconButton, get_icon
 
@@ -37,23 +37,35 @@ class CameraViewWidget(QWidget):
 
     """
 
-    def __init__(self, *args, experiment=None, **kwargs):
+    def __init__(self, *args, experiment=None, role=None, **kwargs):
         """
         :param experiment: experiment to which this belongs
                            (:class:Experiment <stytra.Experiment> object)
+        :param role: if given, targets this specific camera (a key into
+                     experiment.cameras) instead of "the first camera"
+                     (experiment.camera) - lets one CameraViewWidget/
+                     CameraSelection instance be built per camera in a
+                     multi-camera experiment.
         """
 
         super().__init__(*args, **kwargs)
 
         self.experiment = experiment
+        self.role = role
         if experiment is not None:
-            self.camera = experiment.camera
+            self.camera = (
+                experiment.cameras[role] if role is not None else experiment.camera
+            )
             experiment.gui_timer.timeout.connect(self.retrieve_image)
         else:
             self.gui_timer = QTimer()
             self.gui_timer.setSingleShot(False)
 
-        self.control_params = self.experiment.camera_state
+        self.control_params = (
+            self.experiment.camera_states[role]
+            if role is not None
+            else self.experiment.camera_state
+        )
 
         # Create the layout for the camera view:
         self.camera_display_widget = pg.GraphicsLayoutWidget()
@@ -74,7 +86,9 @@ class CameraViewWidget(QWidget):
         self.camera_display_widget.addItem(self.display_area)
 
         # Queue of frames coming from the camera
-        if hasattr(experiment, "frame_dispatcher"):
+        if role is not None:
+            self.frame_queue = self.experiment.frame_dispatchers[role].gui_queue
+        elif hasattr(experiment, "frame_dispatcher"):
             self.frame_queue = self.experiment.frame_dispatcher.gui_queue
         else:
             self.frame_queue = self.camera.frame_queue
@@ -92,7 +106,7 @@ class CameraViewWidget(QWidget):
         self.layout_control.setContentsMargins(10, 0, 10, 10)
 
         self.btn_pause = ControlToggleIcon(
-            self.experiment.camera_state,
+            self.control_params,
             "paused",
             icon_on=get_icon("play"),
             icon_off=get_icon("pause"),
@@ -101,11 +115,11 @@ class CameraViewWidget(QWidget):
         )
         self.layout_control.addWidget(self.btn_pause)
 
-        if hasattr(self.experiment.camera_state, "replay"):
-            self.experiment.camera_state.replay = False
+        if hasattr(self.control_params, "replay"):
+            self.control_params.replay = False
 
             self.btn_rewind = ControlToggleIcon(
-                self.experiment.camera_state,
+                self.control_params,
                 "replay",
                 icon_on=get_icon("rewind"),
                 action_off="Resume",
@@ -212,6 +226,23 @@ class CameraViewWidget(QWidget):
         self.param_widget = ParameterGui(self.control_params)
         self.param_widget.show()
 
+    @property
+    def pipeline(self):
+        """This tile's pipeline - the specific camera's if `role` was given,
+        else the experiment's first/only one (backward-compat)."""
+        if self.role is not None:
+            return self.experiment.pipelines[self.role]
+        return self.experiment.pipeline
+
+    @property
+    def acc_tracking(self):
+        """This tile's tracking accumulator - the specific camera's if
+        `role` was given, else the experiment's first/only one
+        (backward-compat)."""
+        if self.role is not None:
+            return self.experiment.acc_trackings[self.role]
+        return self.experiment.acc_tracking
+
 
 class CameraSelection(CameraViewWidget):
     """Generic class to overlay on video an ROI that can be
@@ -234,7 +265,10 @@ class CameraSelection(CameraViewWidget):
         super().__init__(**kwargs)
         # Redefine the source of the displayed images to be the FrameProcessor
         # output queue:
-        self.frame_queue = self.experiment.frame_dispatcher.gui_queue
+        if self.role is not None:
+            self.frame_queue = self.experiment.frame_dispatchers[self.role].gui_queue
+        else:
+            self.frame_queue = self.experiment.frame_dispatcher.gui_queue
 
     def initialise_roi(self, roi):
         """ROI is initialised separately, so it can first be defined in the
@@ -285,7 +319,7 @@ class TailTrackingSelection(CameraSelection):
         super().__init__(**kwargs)
 
         # Draw ROI for tail selection:
-        self.tail_params = self.experiment.pipeline.tailtrack._params
+        self.tail_params = self.pipeline.tailtrack._params
         self.roi_tail = SingleLineROI(
             self.tail_points(), pen=dict(color=(40, 5, 200), width=3)
         )
@@ -336,10 +370,10 @@ class TailTrackingSelection(CameraSelection):
             return
 
         # Get data from queue(first is timestamp)
-        if len(self.experiment.acc_tracking.stored_data) > 1:
+        if len(self.acc_tracking.stored_data) > 1:
             # To match tracked points and frame displayed looks for matching
             # timestamps from the two different queues:
-            retrieved_data = self.experiment.acc_tracking.values_at_abs_time(
+            retrieved_data = self.acc_tracking.values_at_abs_time(
                 self.current_frame_time
             )
             # Check for data to be displayed:
@@ -385,7 +419,7 @@ class EyeTrackingSelection(CameraSelection):
         # Draw ROI for eyes region selection:
         self.pre_th = [0, 0]
 
-        self.eye_params = self.experiment.pipeline.eyetrack._params
+        self.eye_params = self.pipeline.eyetrack._params
         self.roi_eyes = pg.ROI(
             pos=self.eye_params.wnd_pos,
             size=self.eye_params.wnd_dim,
@@ -438,15 +472,15 @@ class EyeTrackingSelection(CameraSelection):
             return
 
         # Get data from queue(first is timestamp)
-        if len(self.experiment.acc_tracking.stored_data) > 1:
+        if len(self.acc_tracking.stored_data) > 1:
             # To match tracked points and frame displayed looks for matching
             # timestamps from the two different queues:
-            retrieved_data = self.experiment.acc_tracking.values_at_abs_time(
+            retrieved_data = self.acc_tracking.values_at_abs_time(
                 self.current_frame_time
             )
             # Check for data to be displayed:
 
-            if len(self.experiment.acc_tracking.stored_data) > 1:
+            if len(self.acc_tracking.stored_data) > 1:
                 self.roi_eyes.setPen(dict(color=(5, 40, 200), width=3))
                 checkifnan = getattr(retrieved_data, "th_e0")
                 for i, o in enumerate([0, 5]):
@@ -516,6 +550,60 @@ class EyeTrackingSelection(CameraSelection):
 
 class EyeTailTrackingSelection(TailTrackingSelection, EyeTrackingSelection):
     pass
+
+
+class RectROISelection(CameraSelection):
+    """Generic rectangular, resizable ROI bound to a pipeline node's
+    ``wnd_pos``/``wnd_dim`` params. Subclasses just set ``pipeline_attr`` to
+    the name of the pipeline node attribute to bind to (e.g. the
+    ``heartrate``/``fintrack`` attributes on the corresponding Pipeline).
+    """
+
+    pipeline_attr = None
+    roi_color = (5, 40, 200)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.roi_params = getattr(self.pipeline, self.pipeline_attr)._params
+        self.roi_rect = pg.ROI(
+            pos=self.roi_params.wnd_pos,
+            size=self.roi_params.wnd_dim,
+            pen=dict(color=self.roi_color, width=3),
+        )
+        self.roi_rect.addScaleHandle([0, 0], [1, 1])
+        self.roi_rect.addScaleHandle([1, 1], [0, 0])
+        self.initialise_roi(self.roi_rect)
+        self.setting_param_val = False
+
+    def set_pos_from_tree(self):
+        """Go to parent for definition."""
+        super().set_pos_from_tree()
+        if not self.setting_param_val:
+            self.roi_rect.setPos(self.roi_params.wnd_pos, finish=False)
+            self.roi_rect.setSize(self.roi_params.wnd_dim)
+
+    def set_pos_from_roi(self):
+        """Go to parent for definition."""
+        super().set_pos_from_roi()
+        self.setting_param_val = True
+        self.roi_params.params.wnd_dim.changed = True
+        self.roi_params.wnd_dim = tuple([int(p) for p in self.roi_rect.size()])
+        self.roi_params.params.wnd_pos.changed = True
+        self.roi_params.wnd_pos = tuple([int(p) for p in self.roi_rect.pos()])
+        self.setting_param_val = False
+
+    def scale_changed(self):
+        self.set_pos_from_tree()
+
+
+class HeartRateSelection(RectROISelection):
+    pipeline_attr = "heartrate"
+    roi_color = (230, 40, 200)
+
+
+class PectoralFinSelection(RectROISelection):
+    pipeline_attr = "fintrack"
+    roi_color = (40, 200, 230)
 
 
 class CameraViewCalib(CameraViewWidget):
@@ -610,20 +698,15 @@ class CameraViewFish(CameraViewCalib):
         )
         self.display_area.addItem(self.points_fish)
         self.display_area.addItem(self.lines_fish)
-        self.tracking_params = self.experiment.pipeline.fishtrack._params
+        self.tracking_params = self.pipeline.fishtrack._params
 
     def retrieve_image(self):
         super().retrieve_image()
 
-        if (
-            len(self.experiment.acc_tracking.stored_data) == 0
-            or self.current_image is None
-        ):
+        if len(self.acc_tracking.stored_data) == 0 or self.current_image is None:
             return
 
-        current_data = self.experiment.acc_tracking.values_at_abs_time(
-            self.current_frame_time
-        )
+        current_data = self.acc_tracking.values_at_abs_time(self.current_frame_time)
 
         n_fish = self.tracking_params.n_fish_max
 

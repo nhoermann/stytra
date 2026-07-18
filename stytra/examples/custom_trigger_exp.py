@@ -3,7 +3,7 @@
 # showing a Flash.
 
 from pathlib import Path
-from lightparam.param_qt import ParametrizedWidget, Param
+from stytra.lightparam.param_qt import ParametrizedWidget, Param
 from stytra import Stytra, Protocol
 from stytra.stimulation.stimuli.visual import Pause, FullFieldVisualStimulus
 from stytra.triggering import Trigger

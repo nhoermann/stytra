@@ -1,4 +1,4 @@
-from lightparam import Parametrized, Param
+from stytra.lightparam import Parametrized, Param
 from anytree import PreOrderIter, Node, Resolver
 from multiprocessing import Queue
 from collections import namedtuple

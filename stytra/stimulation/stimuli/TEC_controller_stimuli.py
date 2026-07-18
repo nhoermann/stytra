@@ -52,7 +52,7 @@ class SetTECtemperatureStimulus(TECStimulus):
     name = "TEC_temperature_stimulus"
 
     def __init__(self, *args, temperature=25.0, **kwargs):
-        self.temperature = np.float(temperature)
+        self.temperature = float(temperature)
         super().__init__(*args, **kwargs)
 
     def start(self):
@@ -109,7 +109,7 @@ class InterpolatedTECTemperatureStimulus(
 
                 value_set = mc.set_parameter(
                     parameter_id=3000,
-                    value=np.float(self.temperature),
+                    value=float(self.temperature),
                     address=self.address,
                     parameter_instance=self.channel,
                 )

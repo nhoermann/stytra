@@ -7,7 +7,7 @@ from stytra.stimulation.stimuli import FishRelativeStimulus
 from stytra.stimulation.estimators import SimulatedPositionEstimator
 import pandas as pd
 from pathlib import Path
-from lightparam import Param
+from stytra.lightparam import Param
 import numpy as np
 
 REQUIRES_EXTERNAL_HARDWARE = False

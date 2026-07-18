@@ -3,7 +3,7 @@ import random
 from math import sqrt, pi, sin, cos
 from itertools import product
 from PIL import Image, ImageDraw
-import flammkuchen as fl
+from stytra.io import load_h5, save_h5_array
 import imageio
 import logging
 from pathlib import Path
@@ -50,7 +50,7 @@ def existing_file_background(filepath):
     """Returns a numpy array from an image stored at filepath"""
     filepath = Path(filepath)
     if filepath.suffix == ".h5":
-        return fl.load(filepath)
+        return load_h5(filepath)
     else:
         # If using OpenCV, we have to get RGB, not BGR
         try:
@@ -453,4 +453,4 @@ class Grid:
 
 if __name__ == "__main__":
     bg = 255 - poisson_disk_background((640, 640), 12, 2)
-    fl.save("poisson_dense.h5", bg)
+    save_h5_array("poisson_dense.h5", bg)

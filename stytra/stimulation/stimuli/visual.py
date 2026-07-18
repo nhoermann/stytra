@@ -94,10 +94,10 @@ class VisualStimulus(Stimulus):
         if self.clip_mask is not None:
             if isinstance(self.clip_mask, float):  # centered circle
                 a = QRegion(
-                    w / 2 - self.clip_mask * w,
-                    h / 2 - self.clip_mask * h,
-                    self.clip_mask * w * 2,
-                    self.clip_mask * h * 2,
+                    int(w / 2 - self.clip_mask * w),
+                    int(h / 2 - self.clip_mask * h),
+                    int(self.clip_mask * w * 2),
+                    int(self.clip_mask * h * 2),
                     type=QRegion.Ellipse,
                 )
                 p.setClipRegion(a)
@@ -106,10 +106,10 @@ class VisualStimulus(Stimulus):
                 p.setClipRegion(QRegion(QPolygon(points)))
             else:
                 p.setClipRect(
-                    self.clip_mask[0] * w,
-                    self.clip_mask[1] * h,
-                    self.clip_mask[2] * w,
-                    self.clip_mask[3] * h,
+                    int(self.clip_mask[0] * w),
+                    int(self.clip_mask[1] * h),
+                    int(self.clip_mask[2] * w),
+                    int(self.clip_mask[3] * h),
                 )
 
 
@@ -194,6 +194,7 @@ class VideoStimulus(VisualStimulus, DynamicStimulus):
         self.video_path = video_path
 
         self._current_frame = None
+        self._current_qimg = None
         self._last_frame_display_time = 0
         self._video_seq = None
 
@@ -205,6 +206,7 @@ class VideoStimulus(VisualStimulus, DynamicStimulus):
         self._video_seq = pims.Video(self._experiment.asset_dir + "/" + self.video_path)
 
         self._current_frame = self._video_seq.get_frame(self.i_frame)
+        self._current_qimg = None
         try:
             metadata = self._video_seq.get_metadata()
 
@@ -231,15 +233,21 @@ class VideoStimulus(VisualStimulus, DynamicStimulus):
             next_frame = self._video_seq.get_frame(self.i_frame)
             if next_frame is not None:
                 self._current_frame = next_frame
+                self._current_qimg = None
                 self._last_frame_display_time = self._elapsed
 
     def paint(self, p, w, h):
         display_centre = (w / 2, h / 2)
-        img = qimage2ndarray.array2qimage(self._current_frame)
+        # _current_frame only changes once per video frame (gated in update()
+        # above), so the QImage conversion is cached rather than redone on
+        # every paint() call, which can run at a higher rate than the video.
+        if self._current_qimg is None:
+            self._current_qimg = qimage2ndarray.array2qimage(self._current_frame)
+        img = self._current_qimg
         p.drawImage(
             QPoint(
-                display_centre[0] - self._current_frame.shape[1] // 2,
-                display_centre[1] - self._current_frame.shape[0] // 2,
+                int(display_centre[0] - self._current_frame.shape[1] // 2),
+                int(display_centre[1] - self._current_frame.shape[0] // 2),
             ),
             img,
         )
@@ -539,8 +547,8 @@ class PaintGratingStimulus(BackgroundStimulus):
         p.setRenderHint(QPainter.Antialiasing)
         p.setBrush(QBrush(QColor(*self.color)))
         p.drawRect(
-            point.x(),
-            point.y(),
+            int(point.x()),
+            int(point.y()),
             int(
                 self.grating_period
                 / (2 * max(self._experiment.calibrator.mm_px, 0.0001))
@@ -599,27 +607,27 @@ class HalfFieldStimulus(PositionStimulus):
             + h / 2 * np.sin(theta)
             + self.center_dist * np.sin(theta - np.pi / 2)
         )
-        points.append(QPoint(sx, sy))
+        points.append(QPoint(int(sx), int(sy)))
         theta += dtheta
 
         sx += w * np.cos(theta)
         sy += w * np.sin(theta)
-        points.append(QPoint(sx, sy))
+        points.append(QPoint(int(sx), int(sy)))
         theta += dtheta
 
         sx += h * np.cos(theta)
         sy += h * np.sin(theta)
-        points.append(QPoint(sx, sy))
+        points.append(QPoint(int(sx), int(sy)))
         theta += dtheta
 
         sx += w * np.cos(theta)
         sy += w * np.sin(theta)
-        points.append(QPoint(sx, sy))
+        points.append(QPoint(int(sx), int(sy)))
         theta += dtheta
 
         sx += h * np.cos(theta)
         sy += h * np.sin(theta)
-        points.append(QPoint(sx, sy))
+        points.append(QPoint(int(sx), int(sy)))
 
         poly = QPolygon(points)
         p.drawPolygon(poly)
@@ -642,24 +650,32 @@ class RadialSineStimulus(VisualStimulus):
         self.name = "radial_sine_centering"
         self._dt = 0
         self._past_t = 0
+        self._dist_field = None
+        self._dist_field_key = None
 
     def update(self):
         self._dt = self._elapsed - self._past_t
         self._past_t = self._elapsed
         self.phase += self._dt * self.velocity
 
-    def paint(self, p, w, h):
-        x, y = (
-            (np.arange(d) - d / 2) * self._experiment.calibrator.mm_px for d in (w, h)
-        )
-        self.image = np.round(
-            np.sin(
-                np.sqrt((x[None, :] ** 2 + y[:, None] ** 2) * (2 * np.pi / self.period))
-                + self.phase
+    def _get_dist_field(self, w, h, mm_px):
+        # sqrt(dist**2 * 2pi/period) only depends on (w, h, mm_px, period),
+        # never on self.phase, so it's cached instead of recomputed every
+        # single paint() call - only the cheap sin(...) below is per-frame.
+        key = (w, h, mm_px, self.period)
+        if self._dist_field_key != key:
+            x, y = ((np.arange(d) - d / 2) * mm_px for d in (w, h))
+            self._dist_field = np.sqrt(
+                (x[None, :] ** 2 + y[:, None] ** 2) * (2 * np.pi / self.period)
             )
-            * 127
-            + 127
-        ).astype(np.uint8)
+            self._dist_field_key = key
+        return self._dist_field
+
+    def paint(self, p, w, h):
+        dist_field = self._get_dist_field(w, h, self._experiment.calibrator.mm_px)
+        self.image = np.round(np.sin(dist_field + self.phase) * 127 + 127).astype(
+            np.uint8
+        )
         p.drawImage(QPoint(0, 0), qimage2ndarray.array2qimage(self.image))
 
 
@@ -679,14 +695,14 @@ class FishOverlayStimulus(PositionStimulus):
         p.setBrush(QBrush(QColor(*self.color)))
         p.setRenderHint(QPainter.Antialiasing)
         p.setBrush(QBrush(QColor(255, 255, 255)))
-        p.drawEllipse(self.x, self.y, 3, 3)
+        p.drawEllipse(QPointF(self.x, self.y), 3, 3)
         p.setPen(QPen(QColor(*self.color)))
         l = 20
         p.drawLine(
-            self.x,
-            self.y,
-            self.x + np.cos(self.theta) * l,
-            self.y + np.sin(self.theta) * l,
+            QPointF(self.x, self.y),
+            QPointF(
+                self.x + np.cos(self.theta) * l, self.y + np.sin(self.theta) * l
+            ),
         )
 
 
@@ -934,8 +950,6 @@ class CalibratedCircleStimulus(VisualStimulus, DynamicStimulus):
         else:
             mm_px = 1
 
-        print(mm_px)
-
         # draw the background
         p.setPen(Qt.NoPen)
         p.setBrush(QBrush(QColor(*self.background_color)))
@@ -978,5 +992,5 @@ class FixationCrossStimulus(FullFieldVisualStimulus):
         l = w * self.arm_len
         w_p = w * self.position[0]
         h_p = h * self.position[1]
-        p.drawLine(w_p - l, h_p, w_p + l, h_p)
-        p.drawLine(w_p, h_p - l, w_p, h_p + l)
+        p.drawLine(QPointF(w_p - l, h_p), QPointF(w_p + l, h_p))
+        p.drawLine(QPointF(w_p, h_p - l), QPointF(w_p, h_p + l))

@@ -15,7 +15,7 @@ from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtGui import QIcon
 
-import pkg_resources
+from importlib.resources import files
 import qdarkstyle
 import pyqtgraph as pg
 import json
@@ -95,6 +95,21 @@ class Stytra:
                 kbit_rate: int
                     for mp4 format, target kilobits per second of video
 
+        cameras : list
+            use this instead of the singular `camera`/`tracking`/`recording` above to run
+            several cameras at once (e.g. one for tail tracking, one for heart-rate tracking),
+            each acquiring and (optionally) tracking/recording independently. A list of dicts,
+            each with:
+                role: str, optional
+                    identifies this camera (defaults to "camera_<i>")
+                camera: dict
+                    same shape as the singular `camera` argument above
+                tracking: dict, optional
+                    same shape as the singular `tracking` argument above; if omitted, this
+                    camera is only acquired (and optionally recorded), not tracked
+                recording: dict, optional
+                    same shape as the singular `recording` argument above
+
         embedded : bool
             if not embedded, use circle calibrator
             to match the camera and projector
@@ -138,6 +153,22 @@ class Stytra:
 
             Example: arduino_board=dict(port="COM3", layout=(dict(pin=5, mode="pwm", ad="d")))
 
+        scanimage_config : dict
+            Dictionary describing the configuration for triggering a ScanImage
+            acquisition (via the MATLAB Engine API) when the protocol starts.
+            Fields:
+                - "engine_name" : name of the shared MATLAB session to connect
+                  to, as passed to ``matlab.engine.shareEngine('<name>')`` in
+                  the MATLAB session running ScanImage. That call must be made
+                  once on the ScanImage side (manually, or from ScanImage's own
+                  startup/user-function hooks) before stytra can attach to it -
+                  stytra cannot start or configure ScanImage itself. If omitted,
+                  stytra attaches to the first shared session it finds.
+                - "grab_command" : (optional) MATLAB expression evaluated to
+                  start acquisition, default ``"hSI.startGrab()"``.
+
+            Example: scanimage_config=dict(engine_name="ScanImage")
+
     """
 
     def __init__(self, exec=True, app=None, **kwargs):
@@ -180,18 +211,34 @@ class Stytra:
 
         base = VisualExperiment
 
-        if "camera" in class_kwargs.keys():
+        if "camera" in class_kwargs.keys() or "cameras" in class_kwargs.keys():
             base = CameraVisualExperiment
-            if "tracking" in class_kwargs.keys():
+            if "cameras" in class_kwargs.keys():
+                tracking_configs = [
+                    entry["tracking"]
+                    for entry in class_kwargs["cameras"]
+                    if entry.get("tracking") is not None
+                ]
+                has_tracking = len(tracking_configs) > 0
+                not_embedded = any(
+                    not t.get("embedded", True) for t in tracking_configs
+                )
+            else:
+                has_tracking = "tracking" in class_kwargs.keys()
+                not_embedded = has_tracking and not class_kwargs["tracking"].get(
+                    "embedded", True
+                )
+
+            if has_tracking:
                 base = TrackingExperiment
-                if not class_kwargs["tracking"].get("embedded", True):
+                if not_embedded:
                     class_kwargs["calibrator"] = CircleCalibrator()
 
         # Stytra logo
         app_icon = QIcon()
         for size in [32, 64, 128, 256]:
             app_icon.addFile(
-                pkg_resources.resource_filename(__name__, "/icons/{}.png".format(size)),
+                str(files("stytra").joinpath("icons", "{}.png".format(size))),
                 QSize(size, size),
             )
         app.setWindowIcon(app_icon)

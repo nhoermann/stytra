@@ -7,7 +7,7 @@ from stytra import Stytra
 from stytra.stimulation.stimuli import Pause
 
 from stytra.stimulation import Protocol
-from lightparam import Param
+from stytra.lightparam import Param
 from pathlib import Path
 import numpy as np
 import cv2

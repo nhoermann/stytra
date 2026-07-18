@@ -1,21 +1,22 @@
+from importlib.resources import files
+
 from PyQt5.QtCore import QSize
 from PyQt5.QtWidgets import QToolButton
 from PyQt5.QtGui import QIcon
-import pkg_resources
+
+
+def _icon_path(icon_name):
+    return str(files("stytra").joinpath("icons", icon_name + ".svg"))
 
 
 def get_icon(icon_name):
-    return QIcon(
-        pkg_resources.resource_filename(__name__, "../icons/" + icon_name + ".svg")
-    )
+    return QIcon(_icon_path(icon_name))
 
 
 class IconButton(QToolButton):
     def __init__(self, *args, icon_name="", action_name="", **kwargs):
         super().__init__(*args, **kwargs)
-        self.icon = QIcon(
-            pkg_resources.resource_filename(__name__, "../icons/" + icon_name + ".svg")
-        )
+        self.icon = QIcon(_icon_path(icon_name))
         self.setIcon(self.icon)
         self.setToolTip(action_name)
         self.setFixedSize(QSize(48, 48))

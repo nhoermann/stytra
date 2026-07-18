@@ -1,5 +1,5 @@
 import numpy as np
-import flammkuchen as fl
+from stytra.io import save_h5_array
 
 from stytra.utilities import FrameProcess
 from multiprocessing import Queue, Event
@@ -15,6 +15,12 @@ try:
     import av
 except ImportError:
     print("PyAv not installed, writing videos in formats other than H5 not possible.")
+
+try:
+    import zarr
+    from zarr.codecs import BloscCodec
+except ImportError:
+    zarr = None
 
 
 class VideoWriter(FrameProcess):
@@ -215,7 +221,9 @@ class H5VideoWriter(VideoWriter):
         Writes the frames to a hdf5 file.
         """
         super()._complete(filename)
-        fl.save(filename + "video.hdf5", np.array(self._frames, dtype=np.uint8))
+        save_h5_array(
+            str(filename) + "video.hdf5", np.array(self._frames, dtype=np.uint8)
+        )
 
 
 class StreamingVideoWriter(VideoWriter):
@@ -332,3 +340,110 @@ class StreamingVideoWriter(VideoWriter):
         generated_filename = self.__generate_filename(self._get_filename_base())
         if generated_filename != self.__container_filename:
             os.rename(self.__container_filename, generated_filename)
+
+
+class ZarrVideoWriter(VideoWriter):
+    """
+    Writes the recorded frames to a chunked, compressed Zarr store, streaming
+    frame-by-frame instead of buffering the whole recording in RAM like
+    H5VideoWriter does.
+    """
+
+    def __init__(
+        self, *args, chunk_frames: int = 32, compression_level: int = 5, **kwargs
+    ) -> None:
+        """
+        Parameters
+        ----------
+        chunk_frames
+            number of frames per chunk along the time axis of the array.
+        compression_level
+            blosc/zstd compression level (0-9).
+        """
+        if zarr is None:
+            raise RuntimeError(
+                "zarr is not installed, writing videos in zarr format not possible."
+            )
+        super().__init__(*args, **kwargs)
+        self._chunk_frames = chunk_frames
+        self._compression_level = compression_level
+        self._group = None
+        self._array = None
+        self._n_frames = 0
+
+        self.__store_filename = self.__generate_filename(self.CONST_FALLBACK_FILENAME)
+
+    def __generate_filename(self, filename: str) -> str:
+        """
+        Generates the store path dependent on the given filename.
+
+        Parameters
+        ----------
+        filename
+            a unique identifier to be used in the path for saving the zarr store.
+        """
+        return str(filename) + "video.zarr"
+
+    def _configure(self, shape: np.ndarray.shape) -> None:
+        """
+        Opens the zarr group and creates the chunked, compressed "video"
+        array, using the parameters set on initialisation.
+
+        Parameters
+        ----------
+        shape
+            the width and height of the frames.
+        """
+        super()._configure(shape)
+
+        if self._get_filename_base() is not None:
+            self.__store_filename = self.__generate_filename(self._get_filename_base())
+
+        self._group = zarr.open_group(self.__store_filename, mode="w")
+        self._array = self._group.create_array(
+            name="video",
+            shape=(0,) + tuple(shape),
+            chunks=(self._chunk_frames,) + tuple(shape),
+            dtype="uint8",
+            compressors=[
+                BloscCodec(
+                    cname="zstd", clevel=self._compression_level, shuffle="shuffle"
+                )
+            ],
+        )
+        self._n_frames = 0
+
+    def _ingest_frame(self, frame: np.ndarray) -> None:
+        """
+        Appends the frame to the zarr array by resizing along the time axis.
+        """
+        self._array.resize((self._n_frames + 1,) + self._array.shape[1:])
+        self._array[self._n_frames] = frame
+        self._n_frames += 1
+
+    def _reset(self) -> None:
+        super()._reset()
+        self._group = None
+        self._array = None
+        self._n_frames = 0
+        self.__store_filename = self.__generate_filename(self.CONST_FALLBACK_FILENAME)
+
+    def _complete(self, filename: str) -> None:
+        """
+        Completes the recording process, recording the total frame count.
+        If the fallback filename was used, but the new filename has been
+        retrieved, the store directory will be renamed.
+
+        Parameters
+        ----------
+        filename
+            the unique identifier that the store path should have. If it is
+            different from the initial filename (i.e. because the fallback
+            name was used) the store will be renamed to this.
+        """
+        super()._complete(filename)
+        self._array.attrs["n_frames"] = self._n_frames
+
+        generated_filename = self.__generate_filename(self._get_filename_base())
+        if generated_filename != self.__store_filename:
+            os.rename(self.__store_filename, generated_filename)

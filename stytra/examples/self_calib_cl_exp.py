@@ -3,7 +3,7 @@ import numpy as np
 from stytra import Stytra
 from stytra.stimulation import Protocol
 from stytra.stimulation.stimuli import CalibratingClosedLoop1D, GratingStimulus
-from lightparam import Param
+from stytra.lightparam import Param
 from pathlib import Path
 
 REQUIRES_EXTERNAL_HARDWARE = False

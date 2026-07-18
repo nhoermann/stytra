@@ -55,12 +55,13 @@ class DisplayedMessage(QLabel):
 
 
 class StatusMessageDisplay(QWidget):
-    def __init__(self):
+    def __init__(self, logger=None):
         super().__init__()
         self.setLayout(QHBoxLayout())
         self.queues = []
         self.current_messages = OrderedDict()
         self.new_messages = []
+        self.logger = logger
 
     def addMessageQueue(self, queue):
         self.queues.append(queue)
@@ -86,6 +87,14 @@ class StatusMessageDisplay(QWidget):
                 try:
                     msg = queue.get(timeout=0.001)
                     self.addMessage(msg)
+                    # The fading status bar widget above is easy to miss -
+                    # also route warnings/errors through the persistent log
+                    # (I:/P: are routine and would just flood it).
+                    if self.logger is not None and len(msg) >= 2:
+                        if msg[0] == "W":
+                            self.logger.warning(msg[2:])
+                        elif msg[0] == "E":
+                            self.logger.error(msg[2:])
                 except Empty:
                     break
 

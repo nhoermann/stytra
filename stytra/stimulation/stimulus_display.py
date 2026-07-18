@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 
 import numpy as np
@@ -13,7 +14,7 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
 )
 
-from lightparam.param_qt import ParametrizedWidget, Param
+from stytra.lightparam.param_qt import ParametrizedWidget, Param
 
 
 class StimulusDisplayWindow(ParametrizedWidget):
@@ -221,7 +222,18 @@ class StimDisplayWidget:
 
         if self.calibrator is not None:
             if self.calibrator.enabled:
-                self.calibrator.paint_calibration_pattern(p, h, w)
+                # A bug here must never propagate out of paintEvent: doing
+                # so would skip p.end() below, leaving this QPainter active
+                # when it's garbage-collected - which can corrupt Qt's paint
+                # state and freeze the whole display, taking a running
+                # experiment down with it (see: drawLine float/int crash).
+                try:
+                    self.calibrator.paint_calibration_pattern(p, h, w)
+                except Exception:
+                    logging.getLogger().exception(
+                        "Error painting calibration pattern - disabling it."
+                    )
+                    self.calibrator.enabled = False
 
         p.end()
 

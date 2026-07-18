@@ -5,7 +5,7 @@ from PyQt5.QtCore import pyqtSignal, QTimer, QObject
 from stytra.stimulation.stimuli import Pause, DynamicStimulus
 from stytra.collectors.accumulators import DynamicLog, FramerateAccumulator
 from stytra.utilities import FramerateRecorder
-from lightparam.param_qt import ParametrizedQt, Param
+from stytra.lightparam.param_qt import ParametrizedQt, Param
 
 import logging
 

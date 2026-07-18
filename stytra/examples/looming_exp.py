@@ -4,7 +4,7 @@ import pandas as pd
 from stytra import Stytra
 from stytra.stimulation import Protocol
 from stytra.stimulation.stimuli import InterpolatedStimulus, CalibratedCircleStimulus
-from lightparam import Param
+from stytra.lightparam import Param
 
 REQUIRES_EXTERNAL_HARDWARE = False
 

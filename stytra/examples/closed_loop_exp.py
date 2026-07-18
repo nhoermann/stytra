@@ -5,7 +5,7 @@ from pathlib import Path
 from stytra import Stytra
 from stytra.stimulation import Protocol
 from stytra.stimulation.stimuli import Basic_CL_1D, GratingStimulus
-from lightparam import Param
+from stytra.lightparam import Param
 
 REQUIRES_EXTERNAL_HARDWARE = False
 

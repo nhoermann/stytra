@@ -13,7 +13,7 @@ from stytra.tracking.preprocessing import BackgroundSubtractor
 
 from itertools import chain
 
-from lightparam import Param
+from stytra.lightparam import Param
 from stytra.tracking.simple_kalman import predict_inplace, update_inplace
 from stytra.tracking.pipelines import ImageToDataNode, NodeOutput
 from collections import namedtuple

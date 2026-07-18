@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import QProgressBar, QToolBar
 from stytra.stimulation import ProtocolRunner
 import datetime
 
-from lightparam.gui import ParameterGui
+from stytra.lightparam.gui import ParameterGui
 from math import floor, ceil
 
 from stytra.gui.buttons import IconButton, ToggleIconButton

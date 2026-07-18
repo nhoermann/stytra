@@ -22,6 +22,13 @@ class BaslerCamera(Camera):
             pylon.TlFactory.GetInstance().CreateFirstDevice()
         )
 
+    @staticmethod
+    def list_devices():
+        return [
+            dev.GetSerialNumber()
+            for dev in pylon.TlFactory.GetInstance().EnumerateDevices()
+        ]
+
     def open_camera(self):
         """ """
         self.camera.Open()

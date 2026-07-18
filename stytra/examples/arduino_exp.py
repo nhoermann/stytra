@@ -1,6 +1,6 @@
 from stytra import Stytra, Protocol
 from stytra.stimulation.stimuli.arduino import WriteArduinoPin
-from lightparam import Param
+from stytra.lightparam import Param
 
 REQUIRES_EXTERNAL_HARDWARE = True
 

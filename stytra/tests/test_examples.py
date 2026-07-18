@@ -1,6 +1,6 @@
 from time import sleep, time
 
-from lightparam import Param
+from stytra.lightparam import Param
 import stytra
 
 from stytra.stimulation import Protocol, Pause
@@ -68,7 +68,7 @@ def test_base_exp(qtbot, protocol):
     qtbot.mouseClick(exp_wnd.toolbar_control.toggleStatus, Qt.LeftButton, delay=1)
 
     # Wait a safe amount for the end of the protocol
-    d = (duration + 1) * 5000
+    d = int((duration + 1) * 5000)
     if d > 400000:
         d = 40000
     print("Duration = {:.1f} min".format((d / 60000)))

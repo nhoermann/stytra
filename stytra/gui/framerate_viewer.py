@@ -17,6 +17,10 @@ class FramerateWidget(QWidget):
         self.inertia = inertia
         self.set_fps = False
         self.setSizePolicy(QSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding))
+        # Without a floor, a layout with many docks competing for space (e.g.
+        # several tiled cameras) can squeeze this down to an unreadable
+        # sliver, with nothing visibly wrong to point at.
+        self.setMinimumSize(80, 50)
         self.indicator_color = (40, 230, 150)
         self.indicator_shadow_color = (17, 147, 91)
         self.error_indicator_color = (230, 40, 0)

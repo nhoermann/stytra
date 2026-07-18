@@ -1,7 +1,7 @@
 try:
-    import pyfirmata as pyfi
+    import pyfirmata2 as pyfi
 except ImportError:
-    print("Pyfirmata is not installed")
+    print("pyfirmata2 is not installed")
 
 # direct mode to call pins with pyfirmata
 from time import sleep

@@ -8,13 +8,13 @@ import numpy as np
 from multiprocessing import Queue, Event
 from queue import Empty, Full
 
-from lightparam import Param
-from lightparam.param_qt import ParametrizedQt
+from stytra.lightparam import Param
+from stytra.lightparam.param_qt import ParametrizedQt
 
 from stytra.hardware.video.cameras.interface import CameraError
 from stytra.utilities import FrameProcess
-from arrayqueues.shared_arrays import IndexedArrayQueue
-import flammkuchen as fl
+from stytra.shared_queue import IndexedArrayQueue
+from stytra.io import load_h5
 
 from stytra.hardware.video.cameras import camera_class_dict
 
@@ -74,17 +74,13 @@ class VideoSource(FrameProcess):
         self.state = None
 
     def put_frame(self, frame, messages):
-        # If the queue is full, arrayqueues should print a warning!
         try:
             if self.frame_queue.queue.qsize() < self.n_consumers + 2:
                 self.frame_queue.put(frame)
             else:
                 messages.append("W:Dropped frame")
-        except NotImplementedError:
-            try:
-                self.frame_queue.put(frame)
-            except Full:
-                messages.append("W:Dropped frame")
+        except Full:
+            messages.append("W:Dropped frame")
         self.update_framerate()
 
 
@@ -242,6 +238,7 @@ class CameraSource(VideoSource):
                 self.message_queue.put(m)
 
         self.cam.release()
+        self.frame_queue.close()
 
 
 class VideoFileSource(VideoSource):
@@ -285,7 +282,7 @@ class VideoFileSource(VideoSource):
         if self.state is None:
             self.state = VideoControlParameters()
         if self.source_file.endswith("h5") or self.source_file.endswith("hdf5"):
-            framedata = fl.load(self.source_file)
+            framedata = load_h5(self.source_file)
 
             if isinstance(framedata, np.ndarray):
                 frames = framedata
@@ -322,6 +319,8 @@ class VideoFileSource(VideoSource):
                 for m in messages:
                     self.message_queue.put(m)
                 prt = time.process_time()
+
+            self.frame_queue.close()
 
         else:
             import av
@@ -364,6 +363,7 @@ class VideoFileSource(VideoSource):
 
                 container.seek(0)
 
+            self.frame_queue.close()
             return
 
 

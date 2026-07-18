@@ -1,7 +1,7 @@
 from stytra import Stytra, Protocol
 from stytra.stimulation.stimuli.visual import Pause, FullFieldVisualStimulus
 from stytra.metadata import AnimalMetadata
-from lightparam import Param
+from stytra.lightparam import Param
 
 REQUIRES_EXTERNAL_HARDWARE = False
 
