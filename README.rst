@@ -26,6 +26,16 @@ this fork.
 Stytra is divided into independent modules which can be assembled depending on the experimental requirements:
 stimulus display and control, camera acquisition and closed-loop tracking, and data logging.
 
+Disclaimer
+----------
+
+This fork comes with **no guarantees that it will work**. Large parts of it (the new tracking pipelines, the
+multi-camera architecture, Zarr storage, ScanImage triggering) have only been validated with synthetic data,
+recorded video, or automated tests - not against real cameras, real embedded-fish footage, or a real projector/
+rig. Some known issues are tracked but not yet fixed (see `docs/MODERNIZATION_PROPOSAL.md <docs/MODERNIZATION_PROPOSAL.md>`_).
+Use at your own risk, verify carefully against your own hardware and data before relying on it for real
+experiments, and expect to find and fix things.
+
 Capabilities
 ------------
 
