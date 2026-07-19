@@ -164,12 +164,26 @@ class ZmqTrigger(Trigger):
         if poller.poll(10):
             self.scope_config = self.zmq_socket.recv_json()
             self.device_params_queue.put(self.scope_config)
-            self.zmq_socket.send_json(
-                {
-                    "duration": self.protocol_duration,
-                    "tracking_data_path": self.tracking_data_path,
-                }
+            # Only reply with the newer {"duration", "tracking_data_path"}
+            # dict if the caller's own request says it can parse one -
+            # otherwise reply with the original bare duration number, so
+            # this doesn't break callers other than this session's updated
+            # sashimi build (e.g. older sashimi installs, or third-party
+            # acquisition software using ZmqTrigger as documented) that
+            # still expect the pre-existing wire format.
+            wants_tracking_path = (
+                isinstance(self.scope_config, dict)
+                and self.scope_config.get("supports_tracking_data_path")
             )
+            if wants_tracking_path:
+                self.zmq_socket.send_json(
+                    {
+                        "duration": self.protocol_duration,
+                        "tracking_data_path": self.tracking_data_path,
+                    }
+                )
+            else:
+                self.zmq_socket.send_json(self.protocol_duration)
             return True
         else:
             return False
